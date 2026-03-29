@@ -1,0 +1,52 @@
+server:
+  port: 4000
+
+spring:
+  application:
+    name: fimory-java-api
+  datasource:
+    url: ${SQL_URL:jdbc:sqlserver://CHAUTHANH;instanceName=SQLEXPRESS;databaseName=Fimory;encrypt=false;trustServerCertificate=true}
+    username: ${SQL_USER:fimory}
+    password: ${SQL_PASSWORD:}
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+  jpa:
+    hibernate:
+      ddl-auto: none
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+        implicit-strategy: org.hibernate.boot.model.naming.ImplicitNamingStrategyLegacyJpaImpl
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.SQLServerDialect
+        format_sql: true
+    show-sql: false
+    open-in-view: false
+  flyway:
+    enabled: false
+  servlet:
+    multipart:
+      max-file-size: 1000MB
+      max-request-size: 1000MB
+
+app:
+  storage:
+    upload-dir: ${UPLOAD_DIR:uploads}
+  auth:
+    accept-any-password: true
+  video:
+    storage-root: ${VIDEO_STORAGE_ROOT:video-storage}
+    original-dir: original
+    hls-dir: hls
+    ffmpeg-path: ${FFMPEG_PATH:ffmpeg}
+    ffprobe-path: ${FFPROBE_PATH:ffprobe}
+    watermark-logo-path: ${VIDEO_WATERMARK_LOGO:uploads/watermark/logo.png}
+    hls-segment-duration-sec: 6
+    stream-token-ttl-sec: 3600
+    stream-token-secret: ${VIDEO_STREAM_TOKEN_SECRET:change-this-secret-for-production}
+    dynamic-watermark-mode: FRONTEND_OVERLAY
+  integration:
+    gemini:
+      api-key: ${GEMINI_API_KEY:}
+    email:
+      user: ${EMAIL_USER:}
+      password: ${EMAIL_PASSWORD:}

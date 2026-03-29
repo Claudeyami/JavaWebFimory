@@ -1,0 +1,2 @@
+-- Baseline placeholder migration for existing production schema.
+-- Real table migrations will be added in subsequent phases.

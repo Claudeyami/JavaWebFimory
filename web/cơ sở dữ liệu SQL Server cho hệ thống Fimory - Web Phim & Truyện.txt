@@ -1,0 +1,1837 @@
+-- =============================================
+-- FIMORY - HỆ THỐNG WEB PHIM & TRUYỆN
+-- Database: SQL Server
+-- Version: 1.0
+-- =============================================
+
+USE master;
+GO
+
+-- Tạo database
+IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = 'Fimory')
+BEGIN
+    CREATE DATABASE Fimory;
+END
+GO
+
+USE Fimory;
+GO
+
+-- =============================================
+-- 1. BẢNG NGƯỜI DÙNG & PHÂN QUYỀN
+-- =============================================
+
+-- Bảng vai trò
+CREATE TABLE Roles (
+    RoleID INT PRIMARY KEY IDENTITY(1,1),
+    RoleName NVARCHAR(50) NOT NULL UNIQUE, -- Viewer, Uploader, Author, Translator, Reup, Admin
+    Description NVARCHAR(255),
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- Bảng người dùng
+CREATE TABLE Users (
+    UserID INT PRIMARY KEY IDENTITY(1,1),
+    Username NVARCHAR(50) NOT NULL UNIQUE,
+    Email NVARCHAR(100) NOT NULL UNIQUE,
+    PasswordHash NVARCHAR(255) NOT NULL,
+    FullName NVARCHAR(100),
+    Avatar NVARCHAR(500),
+    RoleID INT NOT NULL DEFAULT 1,
+    IsEmailVerified BIT DEFAULT 0,
+    IsActive BIT DEFAULT 1,
+    IsVIP BIT DEFAULT 0,
+    VIPExpiryDate DATETIME NULL,
+    Points INT DEFAULT 0, -- Điểm thưởng
+    FailedLoginAttempts INT DEFAULT 0,
+    LockedUntil DATETIME NULL,
+    LastLoginAt DATETIME,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (RoleID) REFERENCES Roles(RoleID)
+);
+
+-- Bảng OTP xác thực email
+CREATE TABLE EmailOTP (
+    OTPID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    OTPCode NVARCHAR(6) NOT NULL,
+    ExpiryTime DATETIME NOT NULL,
+    IsUsed BIT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+-- Bảng yêu cầu nâng cấp quyền
+CREATE TABLE RoleUpgradeRequests (
+    RequestID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    RequestedRoleID INT NOT NULL,
+    Reason NVARCHAR(500),
+    Status NVARCHAR(20) DEFAULT 'Pending', -- Pending, Approved, Rejected
+    ReviewedBy INT NULL,
+    ReviewNote NVARCHAR(500),
+    RequestedAt DATETIME DEFAULT GETDATE(),
+    ReviewedAt DATETIME NULL,
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (RequestedRoleID) REFERENCES Roles(RoleID),
+    FOREIGN KEY (ReviewedBy) REFERENCES Users(UserID)
+);
+
+-- =============================================
+-- 2. BẢNG DANH MỤC & THỂ LOẠI
+-- =============================================
+
+-- Bảng thể loại (có thể dùng chung cho phim & truyện)
+CREATE TABLE Categories (
+    CategoryID INT PRIMARY KEY IDENTITY(1,1),
+    CategoryName NVARCHAR(100) NOT NULL,
+    Slug NVARCHAR(100) NOT NULL UNIQUE,
+    Description NVARCHAR(500),
+    Type NVARCHAR(20) NOT NULL, -- Movie, Series, Both
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- Bảng tag
+CREATE TABLE Tags (
+    TagID INT PRIMARY KEY IDENTITY(1,1),
+    TagName NVARCHAR(50) NOT NULL UNIQUE,
+    Slug NVARCHAR(50) NOT NULL UNIQUE,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 3. BẢNG PHIM
+-- =============================================
+
+-- Bảng phim
+CREATE TABLE Movies (
+    MovieID INT PRIMARY KEY IDENTITY(1,1),
+    Title NVARCHAR(255) NOT NULL,
+    Slug NVARCHAR(255) NOT NULL UNIQUE,
+    Description NVARCHAR(MAX),
+    PosterURL NVARCHAR(500),
+    TrailerURL NVARCHAR(500),
+    ReleaseYear INT,
+    Season INT NULL, -- Mùa phim (nếu có)
+    Duration INT, -- Thời lượng (phút)
+    Country NVARCHAR(100),
+    Director NVARCHAR(255),
+    Cast NVARCHAR(MAX), -- Diễn viên (lưu dạng JSON hoặc text)
+    Status NVARCHAR(20) DEFAULT 'Ongoing', -- Ongoing, Completed
+    IsFree BIT DEFAULT 1, -- Miễn phí hay trả phí
+    ViewCount BIGINT DEFAULT 0,
+    Rating DECIMAL(3,2) DEFAULT 0.00, -- Đánh giá trung bình
+    TotalRatings INT DEFAULT 0,
+    Language NVARCHAR(50) DEFAULT 'vi', -- Đa ngôn ngữ
+    UploaderID INT NOT NULL,
+    IsApproved BIT DEFAULT 0, -- Admin duyệt
+    ApprovedBy INT NULL,
+    ApprovedAt DATETIME NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UploaderID) REFERENCES Users(UserID),
+    FOREIGN KEY (ApprovedBy) REFERENCES Users(UserID)
+);
+
+-- Bảng tập phim
+CREATE TABLE MovieEpisodes (
+    EpisodeID INT PRIMARY KEY IDENTITY(1,1),
+    MovieID INT NOT NULL,
+    EpisodeNumber INT NOT NULL,
+    Title NVARCHAR(255),
+    VideoURL NVARCHAR(500) NOT NULL,
+    Duration INT, -- Thời lượng tập phim
+    IsFree BIT DEFAULT 1,
+    ViewCount BIGINT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE CASCADE,
+    UNIQUE(MovieID, EpisodeNumber)
+);
+
+-- Bảng liên kết phim - thể loại
+CREATE TABLE MovieCategories (
+    MovieID INT NOT NULL,
+    CategoryID INT NOT NULL,
+    PRIMARY KEY (MovieID, CategoryID),
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE CASCADE,
+    FOREIGN KEY (CategoryID) REFERENCES Categories(CategoryID) ON DELETE CASCADE
+);
+
+-- Bảng liên kết phim - tag
+CREATE TABLE MovieTags (
+    MovieID INT NOT NULL,
+    TagID INT NOT NULL,
+    PRIMARY KEY (MovieID, TagID),
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE CASCADE,
+    FOREIGN KEY (TagID) REFERENCES Tags(TagID) ON DELETE CASCADE
+);
+
+-- =============================================
+-- 4. BẢNG TRUYỆN
+-- =============================================
+
+-- Bảng truyện
+CREATE TABLE Series (
+    SeriesID INT PRIMARY KEY IDENTITY(1,1),
+    Title NVARCHAR(255) NOT NULL,
+    Slug NVARCHAR(255) NOT NULL UNIQUE,
+    Description NVARCHAR(MAX),
+    CoverURL NVARCHAR(500),
+    Author NVARCHAR(255),
+    Status NVARCHAR(20) DEFAULT 'Ongoing', -- Ongoing, Completed
+    IsFree BIT DEFAULT 1,
+    ViewCount BIGINT DEFAULT 0,
+    Rating DECIMAL(3,2) DEFAULT 0.00,
+    TotalRatings INT DEFAULT 0,
+    Language NVARCHAR(50) DEFAULT 'vi',
+    UploaderID INT NOT NULL,
+    IsApproved BIT DEFAULT 0,
+    ApprovedBy INT NULL,
+    ApprovedAt DATETIME NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UploaderID) REFERENCES Users(UserID),
+    FOREIGN KEY (ApprovedBy) REFERENCES Users(UserID)
+);
+
+-- Bảng chapter truyện
+CREATE TABLE Chapters (
+    ChapterID INT PRIMARY KEY IDENTITY(1,1),
+    SeriesID INT NOT NULL,
+    ChapterNumber INT NOT NULL,
+    Title NVARCHAR(255),
+    Content NVARCHAR(MAX), -- Nội dung chapter
+    IsFree BIT DEFAULT 1,
+    ViewCount BIGINT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE CASCADE,
+    UNIQUE(SeriesID, ChapterNumber)
+);
+
+-- Bảng liên kết truyện - thể loại
+CREATE TABLE SeriesCategories (
+    SeriesID INT NOT NULL,
+    CategoryID INT NOT NULL,
+    PRIMARY KEY (SeriesID, CategoryID),
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE CASCADE,
+    FOREIGN KEY (CategoryID) REFERENCES Categories(CategoryID) ON DELETE CASCADE
+);
+
+-- Bảng liên kết truyện - tag
+CREATE TABLE SeriesTags (
+    SeriesID INT NOT NULL,
+    TagID INT NOT NULL,
+    PRIMARY KEY (SeriesID, TagID),
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE CASCADE,
+    FOREIGN KEY (TagID) REFERENCES Tags(TagID) ON DELETE CASCADE
+);
+
+-- =============================================
+-- 5. BẢNG TƯƠNG TÁC NGƯỜI DÙNG
+-- =============================================
+
+-- Bảng yêu thích phim
+CREATE TABLE MovieFavorites (
+    FavoriteID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    MovieID INT NOT NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE CASCADE,
+    UNIQUE(UserID, MovieID)
+);
+
+-- Bảng yêu thích truyện
+CREATE TABLE SeriesFavorites (
+    FavoriteID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    SeriesID INT NOT NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE CASCADE,
+    UNIQUE(UserID, SeriesID)
+);
+
+-- Bảng đánh giá phim
+CREATE TABLE MovieRatings (
+    RatingID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    MovieID INT NOT NULL,
+    Rating INT CHECK (Rating >= 1 AND Rating <= 5),
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE CASCADE,
+    UNIQUE(UserID, MovieID)
+);
+
+-- Bảng đánh giá truyện
+CREATE TABLE SeriesRatings (
+    RatingID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    SeriesID INT NOT NULL,
+    Rating INT CHECK (Rating >= 1 AND Rating <= 5),
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE CASCADE,
+    UNIQUE(UserID, SeriesID)
+);
+
+-- Bảng bình luận phim
+CREATE TABLE MovieComments (
+    CommentID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    MovieID INT NOT NULL,
+    ParentCommentID INT NULL, -- Trả lời bình luận
+    Content NVARCHAR(1000) NOT NULL,
+    IsDeleted BIT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID),
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE CASCADE,
+    FOREIGN KEY (ParentCommentID) REFERENCES MovieComments(CommentID)
+);
+
+-- Bảng bình luận truyện
+CREATE TABLE SeriesComments (
+    CommentID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    SeriesID INT NOT NULL,
+    ParentCommentID INT NULL,
+    Content NVARCHAR(1000) NOT NULL,
+    IsDeleted BIT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID),
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE CASCADE,
+    FOREIGN KEY (ParentCommentID) REFERENCES SeriesComments(CommentID)
+);
+
+-- Bảng lịch sử xem phim
+CREATE TABLE MovieHistory (
+    HistoryID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    MovieID INT NOT NULL,
+    EpisodeID INT NULL,
+    WatchedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE NO ACTION,
+    FOREIGN KEY (EpisodeID) REFERENCES MovieEpisodes(EpisodeID) ON DELETE NO ACTION
+);
+
+-- Bảng lịch sử đọc truyện
+CREATE TABLE SeriesHistory (
+    HistoryID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    SeriesID INT NOT NULL,
+    ChapterID INT NULL,
+    ReadAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE NO ACTION,
+    FOREIGN KEY (ChapterID) REFERENCES Chapters(ChapterID) ON DELETE NO ACTION
+);
+
+-- =============================================
+-- 6. BẢNG BÁO CÁO VI PHẠM
+-- =============================================
+
+CREATE TABLE Reports (
+    ReportID INT PRIMARY KEY IDENTITY(1,1),
+    ReporterID INT NOT NULL,
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series, Comment
+    ContentID INT NOT NULL, -- ID của nội dung bị báo cáo
+    Reason NVARCHAR(500) NOT NULL,
+    Status NVARCHAR(20) DEFAULT 'Pending', -- Pending, Resolved, Rejected
+    ReviewedBy INT NULL,
+    ReviewNote NVARCHAR(500),
+    ReportedAt DATETIME DEFAULT GETDATE(),
+    ReviewedAt DATETIME NULL,
+    FOREIGN KEY (ReporterID) REFERENCES Users(UserID),
+    FOREIGN KEY (ReviewedBy) REFERENCES Users(UserID)
+);
+
+-- =============================================
+-- 7. BẢNG THANH TOÁN & GÓI VIP
+-- =============================================
+
+-- Bảng gói VIP
+CREATE TABLE VIPPackages (
+    PackageID INT PRIMARY KEY IDENTITY(1,1),
+    PackageName NVARCHAR(100) NOT NULL,
+    Duration INT NOT NULL, -- Số ngày
+    Price DECIMAL(10,2) NOT NULL,
+    Description NVARCHAR(500),
+    IsActive BIT DEFAULT 1,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- Bảng giao dịch thanh toán
+CREATE TABLE Transactions (
+    TransactionID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    PackageID INT NOT NULL,
+    Amount DECIMAL(10,2) NOT NULL,
+    PaymentMethod NVARCHAR(50), -- MoMo, ZaloPay, Banking, etc.
+    TransactionCode NVARCHAR(100) UNIQUE,
+    Status NVARCHAR(20) DEFAULT 'Pending', -- Pending, Success, Failed, Cancelled
+    PaidAt DATETIME NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (PackageID) REFERENCES VIPPackages(PackageID)
+);
+
+-- =============================================
+-- 8. BẢNG THÔNG BÁO
+-- =============================================
+
+CREATE TABLE Notifications (
+    NotificationID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    Type NVARCHAR(50) NOT NULL, -- NewContent, Approval, RoleUpgrade, CommentReply, etc.
+    Title NVARCHAR(255) NOT NULL,
+    Content NVARCHAR(500),
+    RelatedURL NVARCHAR(500), -- Link đến nội dung liên quan
+    IsRead BIT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+-- =============================================
+-- 9. BẢNG BANNER QUẢNG CÁO
+-- =============================================
+
+CREATE TABLE Banners (
+    BannerID INT PRIMARY KEY IDENTITY(1,1),
+    Title NVARCHAR(255),
+    ImageURL NVARCHAR(500) NOT NULL,
+    LinkURL NVARCHAR(500),
+    Position NVARCHAR(50), -- Top, Sidebar, Bottom, etc.
+    StartDate DATETIME,
+    EndDate DATETIME,
+    IsActive BIT DEFAULT 1,
+    DisplayOrder INT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 10. BẢNG ĐIỂM THƯỞNG
+-- =============================================
+
+CREATE TABLE PointTransactions (
+    PointTransactionID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    Points INT NOT NULL, -- Số điểm (+/-)
+    Type NVARCHAR(50), -- WatchMovie, ReadSeries, Comment, Redeem, etc.
+    Description NVARCHAR(255),
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+-- Bảng quà đổi điểm
+CREATE TABLE Rewards (
+    RewardID INT PRIMARY KEY IDENTITY(1,1),
+    RewardName NVARCHAR(255) NOT NULL,
+    Description NVARCHAR(500),
+    PointCost INT NOT NULL,
+    StockQuantity INT DEFAULT 0,
+    IsActive BIT DEFAULT 1,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- Bảng lịch sử đổi quà
+CREATE TABLE RewardRedemptions (
+    RedemptionID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    RewardID INT NOT NULL,
+    PointsSpent INT NOT NULL,
+    Status NVARCHAR(20) DEFAULT 'Pending', -- Pending, Completed, Cancelled
+    RedeemedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (RewardID) REFERENCES Rewards(RewardID)
+);
+
+-- =============================================
+-- 11. BẢNG THỐNG KÊ
+-- =============================================
+
+CREATE TABLE DailyStatistics (
+    StatID INT PRIMARY KEY IDENTITY(1,1),
+    StatDate DATE NOT NULL UNIQUE,
+    TotalViews BIGINT DEFAULT 0,
+    TotalUsers INT DEFAULT 0,
+    TotalMovies INT DEFAULT 0,
+    TotalSeries INT DEFAULT 0,
+    TotalComments INT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 12. BẢNG BACKUP LOG
+-- =============================================
+
+CREATE TABLE BackupLogs (
+    BackupID INT PRIMARY KEY IDENTITY(1,1),
+    BackupType NVARCHAR(50), -- Full, Differential, Transaction
+    BackupPath NVARCHAR(500),
+    Status NVARCHAR(20), -- Success, Failed
+    ErrorMessage NVARCHAR(MAX),
+    BackupDate DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 13. BẢNG THEO DÕI TÁC PHẨM (FOLLOW/SUBSCRIBE)
+-- =============================================
+
+CREATE TABLE Follows (
+    FollowID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series
+    ContentID INT NOT NULL, -- MovieID hoặc SeriesID
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    UNIQUE(UserID, ContentType, ContentID)
+);
+
+-- =============================================
+-- 14. BẢNG LOG HOẠT ĐỘNG HỆ THỐNG (AUDIT LOG)
+-- =============================================
+
+CREATE TABLE ActivityLogs (
+    LogID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NULL, -- NULL nếu là hệ thống tự động
+    Action NVARCHAR(100) NOT NULL, -- Login, Logout, Upload, Delete, Update, Comment, etc.
+    TableName NVARCHAR(50), -- Bảng bị tác động
+    RecordID INT, -- ID của bản ghi bị tác động
+    OldValue NVARCHAR(MAX), -- Giá trị cũ (JSON)
+    NewValue NVARCHAR(MAX), -- Giá trị mới (JSON)
+    IPAddress NVARCHAR(50),
+    UserAgent NVARCHAR(500),
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID)
+);
+
+-- =============================================
+-- 15. BẢNG TIN NHẮN/CHAT HỖ TRỢ
+-- =============================================
+
+CREATE TABLE SupportTickets (
+    TicketID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    Subject NVARCHAR(255) NOT NULL,
+    Status NVARCHAR(20) DEFAULT 'Open', -- Open, InProgress, Resolved, Closed
+    Priority NVARCHAR(20) DEFAULT 'Normal', -- Low, Normal, High, Urgent
+    AssignedTo INT NULL, -- Admin xử lý
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    ClosedAt DATETIME NULL,
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (AssignedTo) REFERENCES Users(UserID)
+);
+
+CREATE TABLE SupportMessages (
+    MessageID INT PRIMARY KEY IDENTITY(1,1),
+    TicketID INT NOT NULL,
+    SenderID INT NOT NULL,
+    Message NVARCHAR(MAX) NOT NULL,
+    AttachmentURL NVARCHAR(500),
+    IsAdminReply BIT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (TicketID) REFERENCES SupportTickets(TicketID) ON DELETE CASCADE,
+    FOREIGN KEY (SenderID) REFERENCES Users(UserID)
+);
+
+-- =============================================
+-- 16. BẢNG CÀI ĐẶT HỆ THỐNG
+-- =============================================
+
+CREATE TABLE SystemSettings (
+    SettingID INT PRIMARY KEY IDENTITY(1,1),
+    SettingKey NVARCHAR(100) NOT NULL UNIQUE,
+    SettingValue NVARCHAR(MAX),
+    Description NVARCHAR(500),
+    UpdatedBy INT NULL,
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UpdatedBy) REFERENCES Users(UserID)
+);
+
+-- =============================================
+-- 17. BẢNG LƯỢT LIKE/DISLIKE BÌNH LUẬN
+-- =============================================
+
+CREATE TABLE MovieCommentReactions (
+    ReactionID INT PRIMARY KEY IDENTITY(1,1),
+    CommentID INT NOT NULL,
+    UserID INT NOT NULL,
+    ReactionType NVARCHAR(10) NOT NULL, -- Like, Dislike
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (CommentID) REFERENCES MovieComments(CommentID) ON DELETE CASCADE,
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    UNIQUE(CommentID, UserID)
+);
+
+CREATE TABLE SeriesCommentReactions (
+    ReactionID INT PRIMARY KEY IDENTITY(1,1),
+    CommentID INT NOT NULL,
+    UserID INT NOT NULL,
+    ReactionType NVARCHAR(10) NOT NULL, -- Like, Dislike
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (CommentID) REFERENCES SeriesComments(CommentID) ON DELETE CASCADE,
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    UNIQUE(CommentID, UserID)
+);
+
+-- =============================================
+-- 18. BẢNG PHIM/TRUYỆN LIÊN QUAN (RELATED CONTENT)
+-- =============================================
+
+CREATE TABLE RelatedMovies (
+    RelatedID INT PRIMARY KEY IDENTITY(1,1),
+    MovieID INT NOT NULL,
+    RelatedMovieID INT NOT NULL,
+    RelationType NVARCHAR(20) DEFAULT 'Similar', -- Similar, SameDirector, SameActor, Sequel
+    DisplayOrder INT DEFAULT 0,
+    FOREIGN KEY (MovieID) REFERENCES Movies(MovieID) ON DELETE CASCADE,
+    FOREIGN KEY (RelatedMovieID) REFERENCES Movies(MovieID),
+    UNIQUE(MovieID, RelatedMovieID)
+);
+
+CREATE TABLE RelatedSeries (
+    RelatedID INT PRIMARY KEY IDENTITY(1,1),
+    SeriesID INT NOT NULL,
+    RelatedSeriesID INT NOT NULL,
+    RelationType NVARCHAR(20) DEFAULT 'Similar', -- Similar, SameAuthor, SameGenre, SpinOff
+    DisplayOrder INT DEFAULT 0,
+    FOREIGN KEY (SeriesID) REFERENCES Series(SeriesID) ON DELETE CASCADE,
+    FOREIGN KEY (RelatedSeriesID) REFERENCES Series(SeriesID),
+    UNIQUE(SeriesID, RelatedSeriesID)
+);
+
+-- =============================================
+-- 19. BẢNG LỊCH PHÁT HÀNH (RELEASE SCHEDULE)
+-- =============================================
+
+CREATE TABLE ReleaseSchedules (
+    ScheduleID INT PRIMARY KEY IDENTITY(1,1),
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series
+    ContentID INT NOT NULL,
+    EpisodeNumber INT NULL, -- Số tập/chapter
+    ScheduledDate DATETIME NOT NULL,
+    IsReleased BIT DEFAULT 0,
+    ReleaseNote NVARCHAR(500),
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 20. BẢNG TỪ KHÓA TÌM KIẾM PHỔ BIẾN
+-- =============================================
+
+CREATE TABLE SearchKeywords (
+    KeywordID INT PRIMARY KEY IDENTITY(1,1),
+    Keyword NVARCHAR(255) NOT NULL UNIQUE,
+    SearchCount INT DEFAULT 1,
+    LastSearchedAt DATETIME DEFAULT GETDATE(),
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 21. BẢNG QUỐC GIA (COUNTRY/REGION)
+-- =============================================
+
+CREATE TABLE Countries (
+    CountryID INT PRIMARY KEY IDENTITY(1,1),
+    CountryName NVARCHAR(100) NOT NULL UNIQUE,
+    CountryCode NVARCHAR(5) UNIQUE, -- VN, US, JP, KR, etc.
+    Flag NVARCHAR(500),
+    IsActive BIT DEFAULT 1
+);
+
+-- =============================================
+-- 22. BẢNG COLLECTION/PLAYLIST
+-- =============================================
+
+CREATE TABLE Collections (
+    CollectionID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    CollectionName NVARCHAR(255) NOT NULL,
+    Description NVARCHAR(500),
+    IsPublic BIT DEFAULT 0, -- Public hoặc Private
+    ThumbnailURL NVARCHAR(500),
+    ViewCount INT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+CREATE TABLE CollectionItems (
+    ItemID INT PRIMARY KEY IDENTITY(1,1),
+    CollectionID INT NOT NULL,
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series
+    ContentID INT NOT NULL,
+    DisplayOrder INT DEFAULT 0,
+    AddedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (CollectionID) REFERENCES Collections(CollectionID) ON DELETE CASCADE
+);
+
+-- =============================================
+-- 23. BẢNG SESSION QUẢN LÝ ĐĂNG NHẬP
+-- =============================================
+
+CREATE TABLE UserSessions (
+    SessionID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    SessionToken NVARCHAR(500) NOT NULL UNIQUE,
+    IPAddress NVARCHAR(50),
+    UserAgent NVARCHAR(500),
+    DeviceType NVARCHAR(50), -- PC, Mobile, Tablet
+    ExpiresAt DATETIME NOT NULL,
+    IsActive BIT DEFAULT 1,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    LastActivityAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+-- =============================================
+-- 24. BẢNG PHIẾU GIẢM GIÁ/COUPON
+-- =============================================
+
+CREATE TABLE Coupons (
+    CouponID INT PRIMARY KEY IDENTITY(1,1),
+    CouponCode NVARCHAR(50) NOT NULL UNIQUE,
+    DiscountType NVARCHAR(20) NOT NULL, -- Percentage, FixedAmount
+    DiscountValue DECIMAL(10,2) NOT NULL,
+    MinPurchaseAmount DECIMAL(10,2) DEFAULT 0,
+    MaxUsageCount INT NULL, -- NULL = unlimited
+    UsedCount INT DEFAULT 0,
+    StartDate DATETIME,
+    EndDate DATETIME,
+    IsActive BIT DEFAULT 1,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+CREATE TABLE CouponUsages (
+    UsageID INT PRIMARY KEY IDENTITY(1,1),
+    CouponID INT NOT NULL,
+    UserID INT NOT NULL,
+    TransactionID INT NOT NULL,
+    DiscountAmount DECIMAL(10,2) NOT NULL,
+    UsedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (CouponID) REFERENCES Coupons(CouponID),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    FOREIGN KEY (TransactionID) REFERENCES Transactions(TransactionID)
+);
+
+-- =============================================
+-- 25. BẢNG EMAIL MARKETING/NEWSLETTER
+-- =============================================
+
+CREATE TABLE EmailSubscribers (
+    SubscriberID INT PRIMARY KEY IDENTITY(1,1),
+    Email NVARCHAR(100) NOT NULL UNIQUE,
+    IsSubscribed BIT DEFAULT 1,
+    SubscribedAt DATETIME DEFAULT GETDATE(),
+    UnsubscribedAt DATETIME NULL
+);
+
+CREATE TABLE EmailCampaigns (
+    CampaignID INT PRIMARY KEY IDENTITY(1,1),
+    CampaignName NVARCHAR(255) NOT NULL,
+    Subject NVARCHAR(255) NOT NULL,
+    Content NVARCHAR(MAX) NOT NULL,
+    Status NVARCHAR(20) DEFAULT 'Draft', -- Draft, Scheduled, Sent
+    ScheduledAt DATETIME NULL,
+    SentAt DATETIME NULL,
+    TotalSent INT DEFAULT 0,
+    TotalOpened INT DEFAULT 0,
+    TotalClicked INT DEFAULT 0,
+    CreatedBy INT NOT NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (CreatedBy) REFERENCES Users(UserID)
+);
+
+-- =============================================
+-- 26. HỆ THỐNG GỢI Ý NỘI DUNG (RECOMMENDATION SYSTEM)
+-- =============================================
+
+-- Bảng lưu gợi ý được tính toán sẵn
+CREATE TABLE Recommendations (
+    RecommendationID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series
+    ContentID INT NOT NULL,
+    Score DECIMAL(5,2) NOT NULL, -- Điểm gợi ý (0-100)
+    Reason NVARCHAR(100), -- BasedOnHistory, SimilarUsers, PopularInGenre, etc.
+    GeneratedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+-- Bảng ma trận tương đồng người dùng (User Similarity Matrix)
+CREATE TABLE UserSimilarities (
+    SimilarityID INT PRIMARY KEY IDENTITY(1,1),
+    UserID1 INT NOT NULL,
+    UserID2 INT NOT NULL,
+    SimilarityScore DECIMAL(5,4) NOT NULL, -- 0.0000 - 1.0000
+    CalculatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID1) REFERENCES Users(UserID),
+    FOREIGN KEY (UserID2) REFERENCES Users(UserID),
+    CHECK (UserID1 < UserID2), -- Đảm bảo không trùng lặp
+    UNIQUE(UserID1, UserID2)
+);
+
+-- Bảng ma trận tương đồng nội dung (Content Similarity Matrix)
+CREATE TABLE ContentSimilarities (
+    SimilarityID INT PRIMARY KEY IDENTITY(1,1),
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series
+    ContentID1 INT NOT NULL,
+    ContentID2 INT NOT NULL,
+    SimilarityScore DECIMAL(5,4) NOT NULL, -- 0.0000 - 1.0000
+    SimilarityType NVARCHAR(50), -- Genre, Tags, Cast, Director, Ratings
+    CalculatedAt DATETIME DEFAULT GETDATE(),
+    CHECK (ContentID1 < ContentID2),
+    UNIQUE(ContentType, ContentID1, ContentID2, SimilarityType)
+);
+
+-- =============================================
+-- 27. THANH TOÁN NỘI DUNG LẺ (PAY PER VIEW)
+-- =============================================
+
+-- Bảng giá nội dung
+CREATE TABLE ContentPricing (
+    PricingID INT PRIMARY KEY IDENTITY(1,1),
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series, Episode, Chapter
+    ContentID INT NOT NULL,
+    Price DECIMAL(10,2) NOT NULL,
+    Currency NVARCHAR(10) DEFAULT 'VND',
+    IsActive BIT DEFAULT 1,
+    SetBy INT NOT NULL, -- UserID của người đặt giá
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (SetBy) REFERENCES Users(UserID),
+    UNIQUE(ContentType, ContentID)
+);
+
+-- Bảng mua nội dung lẻ
+CREATE TABLE ContentPurchases (
+    PurchaseID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series, Episode, Chapter
+    ContentID INT NOT NULL,
+    Amount DECIMAL(10,2) NOT NULL,
+    PaymentMethod NVARCHAR(50),
+    TransactionCode NVARCHAR(100),
+    Status NVARCHAR(20) DEFAULT 'Pending', -- Pending, Success, Failed, Refunded
+    ExpiryDate DATETIME NULL, -- Null = vĩnh viễn, hoặc thuê có hạn
+    PurchasedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    UNIQUE(UserID, ContentType, ContentID)
+);
+
+-- Bảng lịch sử giao dịch nội dung
+CREATE TABLE ContentTransactionLogs (
+    LogID INT PRIMARY KEY IDENTITY(1,1),
+    PurchaseID INT NOT NULL,
+    Status NVARCHAR(20) NOT NULL,
+    Note NVARCHAR(500),
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (PurchaseID) REFERENCES ContentPurchases(PurchaseID) ON DELETE CASCADE
+);
+
+-- =============================================
+-- 28. SEO & META TAGS
+-- =============================================
+
+CREATE TABLE SEOSettings (
+    SEOID INT PRIMARY KEY IDENTITY(1,1),
+    ContentType NVARCHAR(20) NOT NULL, -- Movie, Series, Category, Tag, Page
+    ContentID INT NULL, -- NULL nếu là page tĩnh
+    PageType NVARCHAR(50), -- Homepage, AboutUs, Contact, etc (nếu ContentID NULL)
+    MetaTitle NVARCHAR(255),
+    MetaDescription NVARCHAR(500),
+    MetaKeywords NVARCHAR(500),
+    OGImage NVARCHAR(500), -- Open Graph Image
+    OGType NVARCHAR(50), -- website, article, video.movie, etc
+    CanonicalURL NVARCHAR(500),
+    RobotsTag NVARCHAR(50), -- index,follow / noindex,nofollow
+    SchemaMarkup NVARCHAR(MAX), -- JSON-LD Schema.org
+    UpdatedBy INT NULL,
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UpdatedBy) REFERENCES Users(UserID),
+    UNIQUE(ContentType, ContentID, PageType)
+);
+
+-- Bảng redirect 301/302 cho SEO
+CREATE TABLE SEORedirects (
+    RedirectID INT PRIMARY KEY IDENTITY(1,1),
+    OldURL NVARCHAR(500) NOT NULL UNIQUE,
+    NewURL NVARCHAR(500) NOT NULL,
+    RedirectType INT DEFAULT 301, -- 301 (permanent), 302 (temporary)
+    IsActive BIT DEFAULT 1,
+    HitCount INT DEFAULT 0,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 29. TÙY CHỈNH GIAO DIỆN NGƯỜI DÙNG
+-- =============================================
+
+CREATE TABLE UserPreferences (
+    PreferenceID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    PreferenceKey NVARCHAR(100) NOT NULL, -- theme, language, autoplay, quality, etc.
+    PreferenceValue NVARCHAR(500),
+    UpdatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    UNIQUE(UserID, PreferenceKey)
+);
+
+-- Bảng preset theme (nếu có nhiều theme)
+CREATE TABLE Themes (
+    ThemeID INT PRIMARY KEY IDENTITY(1,1),
+    ThemeName NVARCHAR(100) NOT NULL UNIQUE,
+    ThemeColor NVARCHAR(50), -- #hex color
+    Description NVARCHAR(255),
+    PreviewImage NVARCHAR(500),
+    IsDefault BIT DEFAULT 0,
+    IsActive BIT DEFAULT 1,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- =============================================
+-- 30. BẢNG HỖ TRỢ TÍNH NĂNG NÂNG CAO
+-- =============================================
+
+-- Bảng watchlist progress (tiến độ xem)
+CREATE TABLE WatchProgress (
+    ProgressID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    ContentType NVARCHAR(20) NOT NULL, -- MovieEpisode, Chapter
+    ContentID INT NOT NULL, -- EpisodeID hoặc ChapterID
+    CurrentPosition INT DEFAULT 0, -- Giây (video) hoặc % (truyện)
+    TotalDuration INT, -- Tổng thời lượng
+    IsCompleted BIT DEFAULT 0,
+    LastWatchedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE,
+    UNIQUE(UserID, ContentType, ContentID)
+);
+
+-- Bảng scheduled tasks (tác vụ tự động)
+CREATE TABLE ScheduledTasks (
+    TaskID INT PRIMARY KEY IDENTITY(1,1),
+    TaskName NVARCHAR(100) NOT NULL,
+    TaskType NVARCHAR(50) NOT NULL, -- RecalcRecommendations, CleanupSessions, SendEmails, etc.
+    Schedule NVARCHAR(100), -- Cron expression: "0 0 * * *"
+    LastRunAt DATETIME NULL,
+    NextRunAt DATETIME NULL,
+    Status NVARCHAR(20) DEFAULT 'Active', -- Active, Paused, Failed
+    ExecutionCount INT DEFAULT 0,
+    LastError NVARCHAR(MAX),
+    IsActive BIT DEFAULT 1,
+    CreatedAt DATETIME DEFAULT GETDATE()
+);
+
+-- Bảng API access tokens (cho mobile app, third-party)
+CREATE TABLE APITokens (
+    TokenID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NULL, -- NULL nếu là system token
+    TokenKey NVARCHAR(500) NOT NULL UNIQUE,
+    TokenSecret NVARCHAR(500) NOT NULL,
+    TokenName NVARCHAR(100),
+    Scope NVARCHAR(500), -- read, write, admin (comma-separated)
+    RateLimitPerHour INT DEFAULT 1000,
+    ExpiresAt DATETIME NULL, -- NULL = không hết hạn
+    IsActive BIT DEFAULT 1,
+    LastUsedAt DATETIME NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+-- Bảng webhook subscriptions (cho tích hợp bên ngoài)
+CREATE TABLE Webhooks (
+    WebhookID INT PRIMARY KEY IDENTITY(1,1),
+    UserID INT NOT NULL,
+    EventType NVARCHAR(100) NOT NULL, -- movie.new, series.updated, user.subscribed, etc.
+    TargetURL NVARCHAR(500) NOT NULL,
+    Secret NVARCHAR(255), -- Để verify webhook
+    IsActive BIT DEFAULT 1,
+    FailureCount INT DEFAULT 0,
+    LastTriggeredAt DATETIME NULL,
+    CreatedAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (UserID) REFERENCES Users(UserID) ON DELETE CASCADE
+);
+
+CREATE TABLE WebhookLogs (
+    LogID INT PRIMARY KEY IDENTITY(1,1),
+    WebhookID INT NOT NULL,
+    EventData NVARCHAR(MAX), -- JSON
+    ResponseStatus INT, -- HTTP status code
+    ResponseBody NVARCHAR(MAX),
+    TriggeredAt DATETIME DEFAULT GETDATE(),
+    FOREIGN KEY (WebhookID) REFERENCES Webhooks(WebhookID) ON DELETE CASCADE
+);
+
+-- =============================================
+-- INSERT DỮ LIỆU MẪU
+-- =============================================
+
+-- Insert Roles
+INSERT INTO Roles (RoleName, Description) VALUES
+('Viewer', 'Người xem mặc định'),
+('Uploader', 'Người upload nội dung'),
+('Author', 'Tác giả truyện'),
+('Translator', 'Nhóm dịch'),
+('Reup', 'Người reup nội dung'),
+('Admin', 'Quản trị viên');
+
+-- Insert Admin User (mật khẩu: Admin@123 - đã hash)
+INSERT INTO Users (Username, Email, PasswordHash, FullName, RoleID, IsEmailVerified, IsActive) VALUES
+('admin', 'admin@fimory.com', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'Administrator', 6, 1, 1);
+
+-- Insert Categories
+INSERT INTO Categories (CategoryName, Slug, Type) VALUES
+(N'Hành động', 'hanh-dong', 'Both'),
+(N'Tình cảm', 'tinh-cam', 'Both'),
+(N'Kinh dị', 'kinh-di', 'Both'),
+(N'Hài hước', 'hai-huoc', 'Both'),
+(N'Khoa học viễn tưởng', 'khoa-hoc-vien-tuong', 'Both'),
+(N'Phiêu lưu', 'phieu-luu', 'Both'),
+(N'Anime', 'anime', 'Movie'),
+(N'Light Novel', 'light-novel', 'Series');
+
+-- Insert VIP Packages
+INSERT INTO VIPPackages (PackageName, Duration, Price, Description) VALUES
+(N'VIP 1 Tháng', 30, 50000, N'Gói VIP 1 tháng - Xem toàn bộ nội dung'),
+(N'VIP 3 Tháng', 90, 120000, N'Gói VIP 3 tháng - Tiết kiệm 20%'),
+(N'VIP 6 Tháng', 180, 200000, N'Gói VIP 6 tháng - Tiết kiệm 33%'),
+(N'VIP 1 Năm', 365, 350000, N'Gói VIP 1 năm - Tiết kiệm 42%');
+
+-- Insert Sample Rewards
+INSERT INTO Rewards (RewardName, Description, PointCost, StockQuantity) VALUES
+(N'Giftcode 10K', N'Mã giảm giá 10,000 VNĐ', 100, 50),
+(N'Giftcode 20K', N'Mã giảm giá 20,000 VNĐ', 180, 30),
+(N'VIP 1 Tuần Free', N'Trải nghiệm VIP miễn phí 7 ngày', 50, 100);
+
+-- Insert Countries
+INSERT INTO Countries (CountryName, CountryCode) VALUES
+(N'Việt Nam', 'VN'),
+(N'Hoa Kỳ', 'US'),
+(N'Nhật Bản', 'JP'),
+(N'Hàn Quốc', 'KR'),
+(N'Trung Quốc', 'CN'),
+(N'Thái Lan', 'TH'),
+(N'Anh', 'UK');
+
+-- Insert System Settings
+INSERT INTO SystemSettings (SettingKey, SettingValue, Description) VALUES
+('SiteName', 'Fimory', N'Tên website'),
+('SiteDescription', N'Hệ thống xem phim và đọc truyện online', N'Mô tả website'),
+('MaxUploadSize', '500', N'Kích thước upload tối đa (MB)'),
+('PointsPerView', '1', N'Điểm nhận được khi xem phim/truyện'),
+('PointsPerComment', '2', N'Điểm nhận được khi bình luận'),
+('VIPTrialDays', '7', N'Số ngày dùng thử VIP'),
+('MaintenanceMode', '0', N'Chế độ bảo trì (0=Off, 1=On)'),
+('AllowRegistration', '1', N'Cho phép đăng ký (0=Off, 1=On)'),
+('RecommendationRefreshHours', '24', N'Tần suất tính toán gợi ý (giờ)'),
+('ContentPurchaseEnabled', '1', N'Cho phép mua nội dung lẻ (0=Off, 1=On)');
+
+-- Insert Themes
+INSERT INTO Themes (ThemeName, ThemeColor, Description, IsDefault) VALUES
+(N'Light Mode', '#ffffff', N'Giao diện sáng', 0),
+(N'Dark Mode', '#1a1a1a', N'Giao diện tối', 1),
+(N'Blue Theme', '#0066cc', N'Giao diện xanh dương', 0),
+(N'Red Theme', '#cc0000', N'Giao diện đỏ', 0);
+
+-- Insert Default User Preferences cho Admin
+INSERT INTO UserPreferences (UserID, PreferenceKey, PreferenceValue) VALUES
+(1, 'theme', 'dark'),
+(1, 'language', 'vi'),
+(1, 'autoplay', 'true'),
+(1, 'quality', 'auto'),
+(1, 'subtitles', 'true');
+
+-- Insert Scheduled Tasks
+INSERT INTO ScheduledTasks (TaskName, TaskType, Schedule, NextRunAt, IsActive) VALUES
+(N'Tính toán gợi ý', 'RecalcRecommendations', '0 2 * * *', DATEADD(HOUR, 2, DATEADD(DAY, 1, CAST(CAST(GETDATE() AS DATE) AS DATETIME))), 1),
+(N'Dọn dẹp session hết hạn', 'CleanupSessions', '0 3 * * *', DATEADD(HOUR, 3, DATEADD(DAY, 1, CAST(CAST(GETDATE() AS DATE) AS DATETIME))), 1),
+(N'Gửi email thông báo', 'SendEmails', '0 8 * * *', DATEADD(HOUR, 8, DATEADD(DAY, 1, CAST(CAST(GETDATE() AS DATE) AS DATETIME))), 1),
+(N'Cập nhật thống kê', 'UpdateStatistics', '0 0 * * *', DATEADD(DAY, 1, CAST(CAST(GETDATE() AS DATE) AS DATETIME)), 1),
+(N'Kiểm tra VIP hết hạn', 'CheckVIPExpiry', '0 1 * * *', DATEADD(HOUR, 1, DATEADD(DAY, 1, CAST(CAST(GETDATE() AS DATE) AS DATETIME))), 1);
+
+GO
+
+-- =============================================
+-- TẠO INDEX ĐỂ TỐI ƯU HIỆU SUẤT
+-- =============================================
+
+-- Index cho Users
+CREATE INDEX IX_Users_Email ON Users(Email);
+CREATE INDEX IX_Users_Username ON Users(Username);
+CREATE INDEX IX_Users_RoleID ON Users(RoleID);
+
+-- Index cho Movies
+CREATE INDEX IX_Movies_Slug ON Movies(Slug);
+CREATE INDEX IX_Movies_UploaderID ON Movies(UploaderID);
+CREATE INDEX IX_Movies_ViewCount ON Movies(ViewCount DESC);
+CREATE INDEX IX_Movies_Rating ON Movies(Rating DESC);
+CREATE INDEX IX_Movies_CreatedAt ON Movies(CreatedAt DESC);
+
+-- Index cho Series
+CREATE INDEX IX_Series_Slug ON Series(Slug);
+CREATE INDEX IX_Series_UploaderID ON Series(UploaderID);
+CREATE INDEX IX_Series_ViewCount ON Series(ViewCount DESC);
+CREATE INDEX IX_Series_Rating ON Series(Rating DESC);
+CREATE INDEX IX_Series_CreatedAt ON Series(CreatedAt DESC);
+
+-- Index cho Comments
+CREATE INDEX IX_MovieComments_MovieID ON MovieComments(MovieID);
+CREATE INDEX IX_SeriesComments_SeriesID ON SeriesComments(SeriesID);
+
+-- Index cho Favorites
+CREATE INDEX IX_MovieFavorites_UserID ON MovieFavorites(UserID);
+CREATE INDEX IX_SeriesFavorites_UserID ON SeriesFavorites(UserID);
+
+-- Index cho History
+CREATE INDEX IX_MovieHistory_UserID ON MovieHistory(UserID);
+CREATE INDEX IX_SeriesHistory_UserID ON SeriesHistory(UserID);
+
+-- Index cho Notifications
+CREATE INDEX IX_Notifications_UserID_IsRead ON Notifications(UserID, IsRead);
+
+-- Index cho Follows
+CREATE INDEX IX_Follows_UserID ON Follows(UserID);
+CREATE INDEX IX_Follows_ContentType_ContentID ON Follows(ContentType, ContentID);
+
+-- Index cho ActivityLogs
+CREATE INDEX IX_ActivityLogs_UserID ON ActivityLogs(UserID);
+CREATE INDEX IX_ActivityLogs_TableName_RecordID ON ActivityLogs(TableName, RecordID);
+CREATE INDEX IX_ActivityLogs_CreatedAt ON ActivityLogs(CreatedAt DESC);
+
+-- Index cho SupportTickets
+CREATE INDEX IX_SupportTickets_UserID ON SupportTickets(UserID);
+CREATE INDEX IX_SupportTickets_Status ON SupportTickets(Status);
+CREATE INDEX IX_SupportTickets_AssignedTo ON SupportTickets(AssignedTo);
+
+-- Index cho Collections
+CREATE INDEX IX_Collections_UserID ON Collections(UserID);
+CREATE INDEX IX_Collections_IsPublic ON Collections(IsPublic);
+
+-- Index cho UserSessions
+CREATE INDEX IX_UserSessions_UserID ON UserSessions(UserID);
+CREATE INDEX IX_UserSessions_SessionToken ON UserSessions(SessionToken);
+CREATE INDEX IX_UserSessions_ExpiresAt ON UserSessions(ExpiresAt);
+
+-- Index cho SearchKeywords
+CREATE INDEX IX_SearchKeywords_SearchCount ON SearchKeywords(SearchCount DESC);
+
+-- Index cho Recommendations
+CREATE INDEX IX_Recommendations_UserID ON Recommendations(UserID);
+CREATE INDEX IX_Recommendations_ContentType_ContentID ON Recommendations(ContentType, ContentID);
+CREATE INDEX IX_Recommendations_Score ON Recommendations(Score DESC);
+
+-- Index cho UserSimilarities
+CREATE INDEX IX_UserSimilarities_UserID1 ON UserSimilarities(UserID1);
+CREATE INDEX IX_UserSimilarities_UserID2 ON UserSimilarities(UserID2);
+CREATE INDEX IX_UserSimilarities_Score ON UserSimilarities(SimilarityScore DESC);
+
+-- Index cho ContentPurchases
+CREATE INDEX IX_ContentPurchases_UserID ON ContentPurchases(UserID);
+CREATE INDEX IX_ContentPurchases_ContentType_ContentID ON ContentPurchases(ContentType, ContentID);
+CREATE INDEX IX_ContentPurchases_Status ON ContentPurchases(Status);
+
+-- Index cho SEOSettings
+CREATE INDEX IX_SEOSettings_ContentType_ContentID ON SEOSettings(ContentType, ContentID);
+
+-- Index cho UserPreferences
+CREATE INDEX IX_UserPreferences_UserID ON UserPreferences(UserID);
+
+-- Index cho WatchProgress
+CREATE INDEX IX_WatchProgress_UserID ON WatchProgress(UserID);
+CREATE INDEX IX_WatchProgress_ContentType_ContentID ON WatchProgress(ContentType, ContentID);
+
+-- Index cho APITokens
+CREATE INDEX IX_APITokens_TokenKey ON APITokens(TokenKey);
+CREATE INDEX IX_APITokens_UserID ON APITokens(UserID);
+
+GO
+
+PRINT N'✅ Database Fimory đã được tạo thành công!';
+PRINT N'📊 Tổng số bảng: 65+';
+PRINT N'👤 Tài khoản Admin mặc định:';
+PRINT N'   - Username: admin';
+PRINT N'   - Email: admin@fimory.com';
+PRINT N'   - Password: Admin@123';
+PRINT N'';
+PRINT N'📋 Các nhóm bảng chính:';
+PRINT N'   ✓ Người dùng & Phân quyền (6 bảng)';
+PRINT N'   ✓ Phim & Truyện (12 bảng)';
+PRINT N'   ✓ Tương tác người dùng (10 bảng)';
+PRINT N'   ✓ Thanh toán & VIP (6 bảng)';
+PRINT N'   ✓ Hệ thống gợi ý (3 bảng)';
+PRINT N'   ✓ SEO & Marketing (4 bảng)';
+PRINT N'   ✓ Hỗ trợ & Quản trị (8 bảng)';
+PRINT N'   ✓ Tùy chỉnh & API (10+ bảng)';
+PRINT N'';
+PRINT N'🆕 Tính năng nâng cao đã thêm:';
+PRINT N'   ✓ Hệ thống gợi ý thông minh (AI-ready)';
+PRINT N'   ✓ Thanh toán nội dung lẻ (Pay per view)';
+PRINT N'   ✓ SEO hoàn chỉnh với Meta tags & Redirects';
+PRINT N'   ✓ Tùy chỉnh giao diện cá nhân hóa';
+PRINT N'   ✓ Tiến độ xem phim/đọc truyện';
+PRINT N'   ✓ API tokens & Webhooks';
+PRINT N'   ✓ Scheduled tasks tự động';
+PRINT N'';
+PRINT N'🚀 Sẵn sàng cho production!';
+GO
+-- BƯỚC 1: Kiểm tra các phim có thể trùng lặp
+PRINT N'=== BƯỚC 1: Kiểm tra phim trùng lặp ===';
+SELECT 
+    m1.MovieID as MovieID1,
+    m1.Title as Title1,
+    m1.Slug as Slug1,
+    m1.CreatedAt as CreatedAt1,
+    (SELECT COUNT(*) FROM dbo.MovieEpisodes WHERE MovieID = m1.MovieID) as Episodes1,
+    m2.MovieID as MovieID2,
+    m2.Title as Title2,
+    m2.Slug as Slug2,
+    m2.CreatedAt as CreatedAt2,
+    (SELECT COUNT(*) FROM dbo.MovieEpisodes WHERE MovieID = m2.MovieID) as Episodes2
+FROM dbo.Movies m1
+CROSS JOIN dbo.Movies m2
+WHERE m1.MovieID < m2.MovieID
+  AND (
+    m1.Title = m2.Title
+    OR m1.Slug LIKE m2.Slug + '%'
+    OR m2.Slug LIKE m1.Slug + '%'
+  )
+ORDER BY m1.CreatedAt DESC;
+GO
+
+-- BƯỚC 2: Xem chi tiết tất cả phim và tập phim
+PRINT N'=== BƯỚC 2: Chi tiết tất cả phim ===';
+SELECT 
+    m.MovieID,
+    m.Title,
+    m.Slug,
+    m.Status,
+    m.CreatedAt,
+    COUNT(me.EpisodeID) as EpisodeCount,
+    STRING_AGG('Tập ' + CAST(me.EpisodeNumber AS VARCHAR) + ': ' + ISNULL(me.Title, 'N/A'), ' | ') WITHIN GROUP (ORDER BY me.EpisodeNumber) as EpisodeList
+FROM dbo.Movies m
+LEFT JOIN dbo.MovieEpisodes me ON m.MovieID = me.MovieID
+GROUP BY m.MovieID, m.Title, m.Slug, m.Status, m.CreatedAt
+ORDER BY m.CreatedAt DESC;
+GO
+
+-- =============================================
+-- THÊM HỖ TRỢ TRUYỆN CHỮ VÀ TRUYỆN TRANH
+-- Script này an toàn để chạy nhiều lần
+-- Tự động kiểm tra và chỉ tạo phần chưa có
+-- =============================================
+
+USE Fimory;
+GO
+
+PRINT N'========================================';
+PRINT N'BẮT ĐẦU CẬP NHẬT DATABASE';
+PRINT N'========================================';
+PRINT N'';
+
+-- =============================================
+-- 1. THÊM CỘT StoryType VÀO BẢNG Series
+-- =============================================
+PRINT N'[1/3] Kiểm tra cột StoryType...';
+
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Series' AND COLUMN_NAME = 'StoryType'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột StoryType...';
+    
+    -- Thêm cột cho phép NULL trước
+    ALTER TABLE Series
+    ADD StoryType NVARCHAR(20) NULL;
+    
+    PRINT N'   ✅ Đã thêm cột StoryType (NULL)';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột StoryType đã tồn tại';
+END
+GO
+
+-- Cập nhật và set NOT NULL cho StoryType (batch riêng)
+IF EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Series' AND COLUMN_NAME = 'StoryType'
+)
+BEGIN
+    -- Cập nhật các giá trị NULL thành 'Text'
+    UPDATE Series SET StoryType = 'Text' WHERE StoryType IS NULL;
+    
+    -- Set NOT NULL nếu chưa phải NOT NULL
+    IF EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_NAME = 'Series' 
+        AND COLUMN_NAME = 'StoryType' 
+        AND IS_NULLABLE = 'YES'
+    )
+    BEGIN
+        ALTER TABLE Series
+        ALTER COLUMN StoryType NVARCHAR(20) NOT NULL;
+    END
+    
+    -- Thêm DEFAULT constraint nếu chưa có
+    IF NOT EXISTS (
+        SELECT * FROM sys.default_constraints 
+        WHERE name = 'DF_Series_StoryType'
+    )
+    BEGIN
+        ALTER TABLE Series
+        ADD CONSTRAINT DF_Series_StoryType DEFAULT 'Text' FOR StoryType;
+    END
+    
+    PRINT N'   ✅ Đã cập nhật StoryType (NOT NULL, DEFAULT ''Text'')';
+END
+GO
+
+-- =============================================
+-- 2. TẠO BẢNG ChapterImages
+-- =============================================
+PRINT N'';
+PRINT N'[2/3] Kiểm tra bảng ChapterImages...';
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'ChapterImages')
+BEGIN
+    PRINT N'   → Đang tạo bảng ChapterImages...';
+    
+    CREATE TABLE ChapterImages (
+        ImageID INT PRIMARY KEY IDENTITY(1,1),
+        ChapterID INT NOT NULL,
+        ImageURL NVARCHAR(500) NOT NULL,
+        ImageOrder INT NOT NULL, -- Thứ tự hiển thị ảnh trong chapter
+        FileSize BIGINT, -- Kích thước file (bytes)
+        Width INT, -- Chiều rộng ảnh (pixels)
+        Height INT, -- Chiều cao ảnh (pixels)
+        CreatedAt DATETIME DEFAULT GETDATE(),
+        FOREIGN KEY (ChapterID) REFERENCES Chapters(ChapterID) ON DELETE CASCADE,
+        UNIQUE(ChapterID, ImageOrder)
+    );
+    
+    -- Tạo index để tối ưu query
+    CREATE INDEX IX_ChapterImages_ChapterID_ImageOrder ON ChapterImages(ChapterID, ImageOrder);
+    
+    PRINT N'   ✅ Đã tạo bảng ChapterImages';
+    PRINT N'   ✅ Đã tạo index IX_ChapterImages_ChapterID_ImageOrder';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Bảng ChapterImages đã tồn tại';
+    
+    -- Kiểm tra và tạo index nếu chưa có
+    IF NOT EXISTS (
+        SELECT * FROM sys.indexes 
+        WHERE name = 'IX_ChapterImages_ChapterID_ImageOrder'
+    )
+    BEGIN
+        CREATE INDEX IX_ChapterImages_ChapterID_ImageOrder ON ChapterImages(ChapterID, ImageOrder);
+        PRINT N'   ✅ Đã tạo index IX_ChapterImages_ChapterID_ImageOrder';
+    END
+END
+GO
+
+-- =============================================
+-- 3. THÊM CỘT ImageCount VÀO BẢNG Chapters
+-- =============================================
+PRINT N'';
+PRINT N'[3/3] Kiểm tra cột ImageCount...';
+
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Chapters' AND COLUMN_NAME = 'ImageCount'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột ImageCount...';
+    
+    -- Thêm cột với DEFAULT value
+    ALTER TABLE Chapters
+    ADD ImageCount INT DEFAULT 0;
+    
+    PRINT N'   ✅ Đã thêm cột ImageCount';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột ImageCount đã tồn tại';
+END
+GO
+
+-- Cập nhật ImageCount từ ChapterImages (batch riêng)
+IF EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Chapters' AND COLUMN_NAME = 'ImageCount'
+)
+BEGIN
+    -- Cập nhật ImageCount nếu bảng ChapterImages đã tồn tại
+    IF EXISTS (SELECT * FROM sys.tables WHERE name = 'ChapterImages')
+    BEGIN
+        UPDATE c
+        SET c.ImageCount = ISNULL(img_cnt.cnt, 0)
+        FROM Chapters c
+        LEFT JOIN (
+            SELECT ChapterID, COUNT(*) as cnt
+            FROM ChapterImages
+            GROUP BY ChapterID
+        ) img_cnt ON c.ChapterID = img_cnt.ChapterID;
+        
+        PRINT N'   ✅ Đã cập nhật ImageCount từ bảng ChapterImages';
+    END
+    ELSE
+    BEGIN
+        -- Đảm bảo tất cả chapters có ImageCount = 0
+        UPDATE Chapters SET ImageCount = 0 WHERE ImageCount IS NULL;
+        PRINT N'   ✅ Đã set ImageCount = 0 cho tất cả chapters';
+    END
+END
+GO
+
+-- =============================================
+-- KẾT THÚC - HIỂN THỊ TÓM TẮT
+-- =============================================
+PRINT N'';
+PRINT N'========================================';
+PRINT N'✅ HOÀN THÀNH CẬP NHẬT DATABASE!';
+PRINT N'========================================';
+PRINT N'';
+
+-- Hiển thị tóm tắt (batch riêng để tránh lỗi DECLARE)
+DECLARE @StoryTypeCount INT = 0;
+DECLARE @ImageCount INT = 0;
+DECLARE @ChapterCount INT = 0;
+
+-- Kiểm tra StoryType
+IF EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Series' AND COLUMN_NAME = 'StoryType'
+)
+BEGIN
+    SELECT @StoryTypeCount = COUNT(*) FROM Series;
+    PRINT N'   ✓ Cột StoryType: Đã có (' + CAST(@StoryTypeCount AS NVARCHAR) + N' truyện)';
+END
+ELSE
+BEGIN
+    PRINT N'   ✗ Cột StoryType: CHƯA CÓ';
+END
+
+-- Kiểm tra ChapterImages
+IF EXISTS (SELECT * FROM sys.tables WHERE name = 'ChapterImages')
+BEGIN
+    SELECT @ImageCount = COUNT(*) FROM ChapterImages;
+    PRINT N'   ✓ Bảng ChapterImages: Đã có (' + CAST(@ImageCount AS NVARCHAR) + N' ảnh)';
+END
+ELSE
+BEGIN
+    PRINT N'   ✗ Bảng ChapterImages: CHƯA CÓ';
+END
+
+-- Kiểm tra ImageCount
+IF EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Chapters' AND COLUMN_NAME = 'ImageCount'
+)
+BEGIN
+    SELECT @ChapterCount = COUNT(*) FROM Chapters;
+    PRINT N'   ✓ Cột ImageCount: Đã có (' + CAST(@ChapterCount AS NVARCHAR) + N' chapters)';
+END
+ELSE
+BEGIN
+    PRINT N'   ✗ Cột ImageCount: CHƯA CÓ';
+END
+
+PRINT N'';
+PRINT N'📝 CÁCH SỬ DỤNG:';
+PRINT N'   - StoryType = ''Text'': Truyện chữ, lưu nội dung trong cột Content';
+PRINT N'   - StoryType = ''Comic'': Truyện tranh, lưu danh sách ảnh trong bảng ChapterImages';
+PRINT N'';
+PRINT N'🚀 Hệ thống đã sẵn sàng hỗ trợ cả truyện chữ và truyện tranh!';
+PRINT N'';
+GO
+-- SAU (chính xác):
+INSERT INTO EmailOTP (UserID, OTPCode, ExpiryTime, IsUsed)
+VALUES (${user.UserID}, ${otpCode}, DATEADD(MINUTE, 10, GETDATE()), 0)
+GO
+-- Thêm DATEDIFF để debug:
+SELECT OTPID, OTPCode, ExpiryTime, IsUsed, CreatedAt,
+       DATEDIFF(SECOND, GETDATE(), ExpiryTime) as SecondsRemaining,
+       DATEDIFF(MINUTE, GETDATE(), ExpiryTime) as MinutesRemaining
+FROM EmailOTP 
+WHERE UserID = ${user.UserID} 
+  AND IsUsed = 0 
+  AND ExpiryTime > GETDATE()
+GO
+INSERT INTO EmailOTP (UserID, OTPCode, ExpiryTime, IsUsed)
+VALUES (@UserID, @OTPCode, DATEADD(MINUTE, 10, GETUTCDATE()), 0);
+GO
+SELECT 
+    OTPID, 
+    UserID, 
+    ExpiryTime, 
+    CreatedAt 
+FROM 
+    EmailOTP 
+WHERE 
+    UserID = @UserID 
+    AND OTPCode = @OTPCode 
+    AND IsUsed = 0 
+    AND ExpiryTime > GETUTCDATE();
+GO
+CREATE TABLE UserWatchedMovies (
+    UserID INT NOT NULL,
+    MovieID INT NOT NULL,
+    Watched BIT NOT NULL DEFAULT 0,
+    CONSTRAINT PK_UserWatchedMovies PRIMARY KEY (UserID, MovieID)
+);
+CREATE TABLE UserReadChapters (
+    UserID INT NOT NULL,
+    ChapterID INT NOT NULL,
+    [Read] BIT NOT NULL DEFAULT 0,
+    CONSTRAINT PK_UserReadChapters PRIMARY KEY (UserID, ChapterID)
+);
+
+CREATE TABLE UserExp (
+    UserID INT PRIMARY KEY,
+    TotalExp INT NOT NULL DEFAULT 0,
+    MaxExp INT NOT NULL DEFAULT 100
+);
+GO
+
+-- =============================================
+-- THÊM HỖ TRỢ CRAWL PHIM TỪ TRANG VN
+-- Script này an toàn để chạy nhiều lần
+-- Tự động kiểm tra và chỉ tạo phần chưa có
+-- =============================================
+
+USE Fimory;
+GO
+
+PRINT N'========================================';
+PRINT N'BẮT ĐẦU CẬP NHẬT DATABASE CHO CRAWL PHIM';
+PRINT N'========================================';
+PRINT N'';
+
+-- =============================================
+-- 1. THÊM CÁC CỘT VÀO BẢNG MovieEpisodes
+-- =============================================
+PRINT N'[1/4] Kiểm tra các cột trong MovieEpisodes...';
+
+-- Thêm cột SeasonNumber (nếu chưa có)
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'MovieEpisodes' AND COLUMN_NAME = 'SeasonNumber'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột SeasonNumber...';
+    ALTER TABLE MovieEpisodes
+    ADD SeasonNumber INT NULL DEFAULT 1;
+    PRINT N'   ✅ Đã thêm cột SeasonNumber';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột SeasonNumber đã tồn tại';
+END
+GO
+
+-- Thêm cột VideoBackupURL
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'MovieEpisodes' AND COLUMN_NAME = 'VideoBackupURL'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột VideoBackupURL...';
+    ALTER TABLE MovieEpisodes
+    ADD VideoBackupURL NVARCHAR(500) NULL;
+    PRINT N'   ✅ Đã thêm cột VideoBackupURL';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột VideoBackupURL đã tồn tại';
+END
+GO
+
+-- Thêm cột SubtitleURL
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'MovieEpisodes' AND COLUMN_NAME = 'SubtitleURL'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột SubtitleURL...';
+    ALTER TABLE MovieEpisodes
+    ADD SubtitleURL NVARCHAR(500) NULL;
+    PRINT N'   ✅ Đã thêm cột SubtitleURL';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột SubtitleURL đã tồn tại';
+END
+GO
+
+-- Thêm cột ServerName (tên server video: Vietsub, Thuyết minh, Server1, Server2, etc.)
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'MovieEpisodes' AND COLUMN_NAME = 'ServerName'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột ServerName...';
+    ALTER TABLE MovieEpisodes
+    ADD ServerName NVARCHAR(100) NULL;
+    PRINT N'   ✅ Đã thêm cột ServerName';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột ServerName đã tồn tại';
+END
+GO
+
+-- Thêm cột CrawlSource (nguồn crawl: phimmoi, hdonline, etc.)
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'MovieEpisodes' AND COLUMN_NAME = 'CrawlSource'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột CrawlSource...';
+    ALTER TABLE MovieEpisodes
+    ADD CrawlSource NVARCHAR(100) NULL;
+    PRINT N'   ✅ Đã thêm cột CrawlSource';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột CrawlSource đã tồn tại';
+END
+GO
+
+-- Thêm cột CrawlEpisodeURL (URL gốc của episode khi crawl)
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'MovieEpisodes' AND COLUMN_NAME = 'CrawlEpisodeURL'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột CrawlEpisodeURL...';
+    ALTER TABLE MovieEpisodes
+    ADD CrawlEpisodeURL NVARCHAR(500) NULL;
+    PRINT N'   ✅ Đã thêm cột CrawlEpisodeURL';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột CrawlEpisodeURL đã tồn tại';
+END
+GO
+
+-- =============================================
+-- 2. THÊM CỘT VÀO BẢNG Movies
+-- =============================================
+PRINT N'';
+PRINT N'[2/4] Kiểm tra các cột trong Movies...';
+
+-- Thêm cột CrawlSource vào Movies (nguồn crawl phim)
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Movies' AND COLUMN_NAME = 'CrawlSource'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột CrawlSource...';
+    ALTER TABLE Movies
+    ADD CrawlSource NVARCHAR(100) NULL;
+    PRINT N'   ✅ Đã thêm cột CrawlSource';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột CrawlSource đã tồn tại';
+END
+GO
+
+-- Thêm cột CrawlMovieURL (URL gốc của phim khi crawl)
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Movies' AND COLUMN_NAME = 'CrawlMovieURL'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột CrawlMovieURL...';
+    ALTER TABLE Movies
+    ADD CrawlMovieURL NVARCHAR(500) NULL;
+    PRINT N'   ✅ Đã thêm cột CrawlMovieURL';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột CrawlMovieURL đã tồn tại';
+END
+GO
+
+-- Thêm cột IMDBScore (nếu chưa có - có thể đã có từ TMDB)
+IF NOT EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'Movies' AND COLUMN_NAME = 'IMDBScore'
+)
+BEGIN
+    PRINT N'   → Đang thêm cột IMDBScore...';
+    ALTER TABLE Movies
+    ADD IMDBScore DECIMAL(3,1) NULL;
+    PRINT N'   ✅ Đã thêm cột IMDBScore';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Cột IMDBScore đã tồn tại';
+END
+GO
+
+-- =============================================
+-- 3. TẠO BẢNG MovieServers (nếu cần lưu nhiều server cho 1 episode)
+-- =============================================
+PRINT N'';
+PRINT N'[3/4] Kiểm tra bảng MovieServers...';
+
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'MovieServers')
+BEGIN
+    PRINT N'   → Đang tạo bảng MovieServers...';
+    
+    CREATE TABLE MovieServers (
+        ServerID INT PRIMARY KEY IDENTITY(1,1),
+        EpisodeID INT NOT NULL,
+        ServerName NVARCHAR(100) NOT NULL, -- Vietsub, Thuyết minh, Server1, Server2, etc.
+        VideoURL NVARCHAR(500) NOT NULL,
+        VideoBackupURL NVARCHAR(500) NULL,
+        SubtitleURL NVARCHAR(500) NULL,
+        Quality NVARCHAR(20) NULL, -- 480p, 720p, 1080p, FullHD, etc.
+        DisplayOrder INT DEFAULT 0, -- Thứ tự hiển thị
+        IsActive BIT DEFAULT 1,
+        CreatedAt DATETIME DEFAULT GETDATE(),
+        UpdatedAt DATETIME DEFAULT GETDATE(),
+        FOREIGN KEY (EpisodeID) REFERENCES MovieEpisodes(EpisodeID) ON DELETE CASCADE
+    );
+    
+    -- Tạo index để tối ưu query
+    CREATE INDEX IX_MovieServers_EpisodeID ON MovieServers(EpisodeID);
+    CREATE INDEX IX_MovieServers_DisplayOrder ON MovieServers(DisplayOrder);
+    
+    PRINT N'   ✅ Đã tạo bảng MovieServers';
+    PRINT N'   ✅ Đã tạo index IX_MovieServers_EpisodeID';
+    PRINT N'   ✅ Đã tạo index IX_MovieServers_DisplayOrder';
+END
+ELSE
+BEGIN
+    PRINT N'   ⚠️ Bảng MovieServers đã tồn tại';
+    
+    -- Kiểm tra và tạo index nếu chưa có
+    IF NOT EXISTS (
+        SELECT * FROM sys.indexes 
+        WHERE name = 'IX_MovieServers_EpisodeID'
+    )
+    BEGIN
+        CREATE INDEX IX_MovieServers_EpisodeID ON MovieServers(EpisodeID);
+        PRINT N'   ✅ Đã tạo index IX_MovieServers_EpisodeID';
+    END
+    
+    IF NOT EXISTS (
+        SELECT * FROM sys.indexes 
+        WHERE name = 'IX_MovieServers_DisplayOrder'
+    )
+    BEGIN
+        CREATE INDEX IX_MovieServers_DisplayOrder ON MovieServers(DisplayOrder);
+        PRINT N'   ✅ Đã tạo index IX_MovieServers_DisplayOrder';
+    END
+END
+GO
+
+-- =============================================
+-- 4. CẬP NHẬT UNIQUE CONSTRAINT CHO MovieEpisodes
+-- =============================================
+PRINT N'';
+PRINT N'[4/4] Kiểm tra unique constraint cho MovieEpisodes...';
+
+-- Kiểm tra xem có unique constraint (MovieID, EpisodeNumber) không
+-- Nếu có SeasonNumber, cần unique (MovieID, SeasonNumber, EpisodeNumber)
+IF EXISTS (
+    SELECT * FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_NAME = 'MovieEpisodes' AND COLUMN_NAME = 'SeasonNumber'
+)
+BEGIN
+    -- Kiểm tra xem đã có unique constraint với SeasonNumber chưa
+    IF NOT EXISTS (
+        SELECT * FROM sys.indexes 
+        WHERE object_id = OBJECT_ID('MovieEpisodes')
+        AND name = 'UQ_MovieEpisodes_MovieID_SeasonNumber_EpisodeNumber'
+    )
+    BEGIN
+        -- Xóa constraint cũ nếu có (MovieID, EpisodeNumber)
+        IF EXISTS (
+            SELECT * FROM sys.indexes 
+            WHERE object_id = OBJECT_ID('MovieEpisodes')
+            AND name LIKE 'UQ_MovieEpisodes%'
+        )
+        BEGIN
+            DECLARE @constraintName NVARCHAR(255);
+            SELECT @constraintName = name 
+            FROM sys.indexes 
+            WHERE object_id = OBJECT_ID('MovieEpisodes')
+            AND name LIKE 'UQ_MovieEpisodes%';
+            
+            EXEC('ALTER TABLE MovieEpisodes DROP CONSTRAINT ' + @constraintName);
+            PRINT N'   → Đã xóa constraint cũ: ' + @constraintName;
+        END
+        
+        -- Tạo unique constraint mới với SeasonNumber
+        ALTER TABLE MovieEpisodes
+        ADD CONSTRAINT UQ_MovieEpisodes_MovieID_SeasonNumber_EpisodeNumber 
+        UNIQUE (MovieID, SeasonNumber, EpisodeNumber);
+        
+        PRINT N'   ✅ Đã tạo unique constraint với SeasonNumber';
+    END
+    ELSE
+    BEGIN
+        PRINT N'   ⚠️ Unique constraint với SeasonNumber đã tồn tại';
+    END
+END
+GO
+
+-- =============================================
+-- KẾT THÚC - HIỂN THỊ TÓM TẮT
+-- =============================================
+PRINT N'';
+PRINT N'========================================';
+PRINT N'✅ HOÀN THÀNH CẬP NHẬT DATABASE!';
+PRINT N'========================================';
+PRINT N'';
+
+-- Hiển thị tóm tắt
+DECLARE @EpisodeCount INT = 0;
+DECLARE @ServerCount INT = 0;
+
+SELECT @EpisodeCount = COUNT(*) FROM MovieEpisodes;
+SELECT @ServerCount = COUNT(*) FROM MovieServers;
+
+PRINT N'📊 TÓM TẮT:';
+PRINT N'   ✓ MovieEpisodes: Đã thêm các cột hỗ trợ crawl';
+PRINT N'     - SeasonNumber (INT)';
+PRINT N'     - VideoBackupURL (NVARCHAR)';
+PRINT N'     - SubtitleURL (NVARCHAR)';
+PRINT N'     - ServerName (NVARCHAR)';
+PRINT N'     - CrawlSource (NVARCHAR)';
+PRINT N'     - CrawlEpisodeURL (NVARCHAR)';
+PRINT N'';
+PRINT N'   ✓ Movies: Đã thêm các cột hỗ trợ crawl';
+PRINT N'     - CrawlSource (NVARCHAR)';
+PRINT N'     - CrawlMovieURL (NVARCHAR)';
+PRINT N'     - IMDBScore (DECIMAL)';
+PRINT N'';
+PRINT N'   ✓ MovieServers: Bảng mới để lưu nhiều server cho 1 episode';
+PRINT N'     - ServerID (PK)';
+PRINT N'     - EpisodeID (FK)';
+PRINT N'     - ServerName, VideoURL, VideoBackupURL, SubtitleURL';
+PRINT N'     - Quality, DisplayOrder, IsActive';
+PRINT N'';
+PRINT N'📝 CÁCH SỬ DỤNG:';
+PRINT N'   - Dùng MovieEpisodes cho trường hợp đơn giản (1 server/episode)';
+PRINT N'   - Dùng MovieServers cho trường hợp phức tạp (nhiều server/episode)';
+PRINT N'   - SeasonNumber: Hỗ trợ phim bộ có nhiều mùa';
+PRINT N'   - CrawlSource: Lưu nguồn crawl (phimmoi, hdonline, etc.)';
+PRINT N'';
+PRINT N'🚀 Hệ thống đã sẵn sàng hỗ trợ crawl phim từ trang VN!';
+PRINT N'';
+GO
+
