@@ -5,10 +5,14 @@ spring:
   application:
     name: fimory-java-api
   datasource:
-    url: ${SQL_URL:jdbc:sqlserver://CHAUTHANH;instanceName=SQLEXPRESS;databaseName=Fimory;encrypt=false;trustServerCertificate=true}
+    url: ${SQL_URL:jdbc:sqlserver://localhost:1433;databaseName=Fimory;encrypt=false;trustServerCertificate=true;loginTimeout=5}
     username: ${SQL_USER:fimory}
     password: ${SQL_PASSWORD:}
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    hikari:
+      connection-timeout: 10000
+      validation-timeout: 5000
+      initialization-fail-timeout: 10000
   jpa:
     hibernate:
       ddl-auto: none

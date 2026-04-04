@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import {
   fetchMovieDetail,
@@ -21,7 +21,7 @@ type Episode = {
   EpisodeID: number;
   EpisodeNumber: number;
   Title?: string;
-  VideoURL: string; // tên file hoặc đường dẫn
+  VideoURL: string;
   Duration?: number;
   ViewCount?: number;
 };
@@ -40,13 +40,13 @@ export const WatchPage: React.FC = () => {
   const [watchedSeconds, setWatchedSeconds] = useState<number>(0);
   const [hasAwardedExp, setHasAwardedExp] = useState<boolean>(false);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const awardedEpisodeIdsRef = useRef<Set<number>>(new Set());
 
   const email = useMemo(
     () => (user?.email as string | undefined) || "",
     [user]
   );
 
-  // Load movie + episodes
   useEffect(() => {
     let cancelled = false;
 
@@ -63,9 +63,8 @@ export const WatchPage: React.FC = () => {
           console.log(`✅ Loaded ${eps.length} episodes:`, eps);
           setMovie(m);
           setEpisodes(eps);
-          
-          // Check if there's an episode query parameter
-          const episodeParam = searchParams.get('episode');
+
+          const episodeParam = searchParams.get("episode");
           if (episodeParam && eps.length > 0) {
             const episodeNumber = parseInt(episodeParam, 10);
             const targetEpisode = eps.find(
@@ -81,7 +80,7 @@ export const WatchPage: React.FC = () => {
           }
         }
       } catch (error) {
-        console.error('❌ Error loading movie/episodes:', error);
+        console.error("❌ Error loading movie/episodes:", error);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -93,80 +92,83 @@ export const WatchPage: React.FC = () => {
     };
   }, [slug, searchParams]);
 
-  // Scroll to comments section if URL hash is #comments
   useEffect(() => {
-    if (!loading && movie && window.location.hash === '#comments') {
+    if (!loading && movie && window.location.hash === "#comments") {
       const scrollToComments = () => {
-        const commentsSection = document.getElementById('comments');
+        const commentsSection = document.getElementById("comments");
         if (commentsSection) {
-          // Tính toán offset để trừ đi chiều cao header (nếu có fixed header)
           const headerOffset = 80;
           const elementPosition = commentsSection.getBoundingClientRect().top;
           const offsetPosition = elementPosition + window.pageYOffset - headerOffset;
 
           window.scrollTo({
             top: offsetPosition,
-            behavior: 'smooth'
+            behavior: "smooth",
           });
           return true;
         }
         return false;
       };
 
-      // Thử ngay lập tức
       if (scrollToComments()) {
-        return; // Đã scroll thành công
+        return;
       }
 
-      // Nếu chưa có, thử lại sau một khoảng thời gian ngắn
       const timeouts: NodeJS.Timeout[] = [];
       const attempts = [100, 300, 500];
-      
+
       attempts.forEach((delay) => {
         const timeout = setTimeout(() => {
           if (scrollToComments()) {
-            // Đã tìm thấy và scroll, clear các timeout còn lại
-            timeouts.forEach(t => clearTimeout(t));
+            timeouts.forEach((t) => clearTimeout(t));
           }
         }, delay);
         timeouts.push(timeout);
       });
 
       return () => {
-        timeouts.forEach(t => clearTimeout(t));
+        timeouts.forEach((t) => clearTimeout(t));
       };
     }
   }, [loading, movie]);
 
-  // Save watch history when episode changes
   useEffect(() => {
     if (!email || !movie || !current) return;
     saveMovieHistory(email, Number(movie.MovieID), current.EpisodeID).catch(
       () => {}
     );
-    // Reset watched time và exp flag khi chuyển episode
     setWatchedSeconds(0);
-    setHasAwardedExp(false);
+    setHasAwardedExp(awardedEpisodeIdsRef.current.has(current.EpisodeID));
   }, [email, movie, current]);
 
-  // Track video time và tăng EXP khi xem 30s (chỉ nếu không phải Admin)
   useEffect(() => {
-    if (!email || !movie || hasAwardedExp || watchedSeconds < 30 || isAdmin) return;
+    if (!email || !movie || !current || hasAwardedExp || isAdmin) return;
+    const durationSeconds = current.Duration ? current.Duration * 60 : 0;
+    if (durationSeconds <= 0) return;
 
-    // Gọi API tăng EXP (chỉ 1 lần cho mỗi phim)
-    awardMovieWatchExp(email, Number(movie.MovieID), watchedSeconds)
+    const watchThreshold = Math.floor(durationSeconds * 0.8);
+    if (watchedSeconds < watchThreshold) return;
+
+    awardMovieWatchExp(
+      email,
+      Number(movie.MovieID),
+      watchedSeconds,
+      current.EpisodeID
+    )
       .then((response) => {
-        if (response.expGained > 0) {
+        if (response.ok) {
+          awardedEpisodeIdsRef.current.add(current.EpisodeID);
           setHasAwardedExp(true);
-          console.log(`✅ Nhận được ${response.expGained} EXP!`);
+          if (response.expGained > 0) {
+            console.log(`✅ Nhận được ${response.expGained} EXP!`);
+          }
         }
       })
       .catch((error) => {
         console.error("Error awarding movie watch EXP:", error);
       });
-  }, [email, movie, watchedSeconds, hasAwardedExp, isAdmin]);
+  }, [email, movie, current, watchedSeconds, hasAwardedExp, isAdmin]);
 
-  // Load ratings when movie/user loaded
   useEffect(() => {
     if (!movie) return;
     const movieId = Number(movie.MovieID);
@@ -181,15 +183,13 @@ export const WatchPage: React.FC = () => {
       });
   }, [movie, email]);
 
-  // Load favorite status when movie loaded
   useEffect(() => {
     if (!movie || !email) return;
     const movieId = Number(movie.MovieID);
-    // Check if movie is in favorites
     fetch(`/api/movies/${movieId}/favorite-status`, {
-      headers: { 'x-user-email': email }
+      headers: { "x-user-email": email }
     })
-       .then(res => res.json())
+      .then(res => res.json())
       .then(payload => {
         const data = payload?.data ?? payload ?? {};
         setIsFavorite(Boolean(data.isFavorite));
@@ -197,15 +197,13 @@ export const WatchPage: React.FC = () => {
       .catch(() => setIsFavorite(false));
   }, [movie, email]);
 
-  // Load user role to check if Admin
   useEffect(() => {
     if (!email) return;
     fetchCurrentRole(email)
-      .then(({ role }) => setIsAdmin(role === 'Admin'))
+      .then(({ role }) => setIsAdmin(role === "Admin"))
       .catch(() => setIsAdmin(false));
   }, [email]);
 
-  // Toggle Favorite
   const handleToggleFavorite = async () => {
     if (!email || !movie) return;
     try {
@@ -215,17 +213,16 @@ export const WatchPage: React.FC = () => {
       } else {
         await addFavorite(email, movieId);
       }
-      
-      // Verify status sau khi toggle để đảm bảo đồng bộ
+
       const response = await fetch(`/api/movies/${movieId}/favorite-status`, {
-        headers: { 'x-user-email': email }
+        headers: { "x-user-email": email }
       });
       if (response.ok) {
         const data = await response.json();
         setIsFavorite(data.isFavorite || false);
       }
     } catch (error) {
-      console.error('Error toggling favorite:', error);
+      console.error("Error toggling favorite:", error);
     }
   };
 
@@ -242,7 +239,6 @@ export const WatchPage: React.FC = () => {
         });
         return;
       } catch {
-        // ignore and fallback to social links
       }
     }
 
@@ -253,7 +249,6 @@ export const WatchPage: React.FC = () => {
       : `https://zalo.me/share?url=${encodedUrl}`;
     window.open(target, "_blank", "noopener,noreferrer");
   };
-
 
   const handleRate = async (value: number) => {
     if (!email || !movie) return;
@@ -266,10 +261,8 @@ export const WatchPage: React.FC = () => {
     }
   };
 
-  // Build video URL (trường hợp bạn phục vụ video từ backend)
   const getVideoSrc = (url: string) => buildStorageUrl(url);
 
-  // UI
   if (loading)
     return (
       <div className="max-w-6xl mx-auto px-4 py-10 text-gray-600 dark:text-gray-300">
@@ -284,23 +277,19 @@ export const WatchPage: React.FC = () => {
       </div>
     );
 
-  // Format episode title to avoid duplication
   const formatEpisodeTitle = (ep: Episode) => {
     const defaultTitle = `Tập ${ep.EpisodeNumber}`;
     if (!ep.Title) return defaultTitle;
-    
-    // Nếu Title trùng với "Tập {EpisodeNumber}" thì chỉ hiển thị Title
+
     if (ep.Title.trim() === defaultTitle || ep.Title.trim() === `Tập ${ep.EpisodeNumber}`) {
       return defaultTitle;
     }
-    
-    // Nếu Title khác thì hiển thị cả hai
+
     return `${defaultTitle}: ${ep.Title}`;
   };
 
-  // Format duration
   const formatDuration = (minutes?: number) => {
-    if (!minutes) return '';
+    if (!minutes) return "";
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
     if (hours > 0) {
@@ -313,9 +302,7 @@ export const WatchPage: React.FC = () => {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Player + Info */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Video Player */}
             <div className="aspect-video bg-black rounded-xl overflow-hidden shadow-2xl">
               {current ? (
                 <video
@@ -327,7 +314,7 @@ export const WatchPage: React.FC = () => {
                   poster={buildMediaUrl(movie.PosterURL) || "/default-poster.jpg"}
                   onTimeUpdate={(e) => {
                     const video = e.currentTarget;
-                    if (video && !isNaN(video.currentTime)) {
+                    if (video && !isNaN(video.currentTime) && !isNaN(video.duration) && video.duration > 0) {
                       const seconds = Math.floor(video.currentTime);
                       setWatchedSeconds(seconds);
                     }
@@ -345,9 +332,7 @@ export const WatchPage: React.FC = () => {
               )}
             </div>
 
-            {/* Movie Info Card */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-              {/* Title + Favorite */}
               <div className="flex items-start justify-between mb-4">
                 <div className="flex-1">
                   <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
@@ -384,20 +369,18 @@ export const WatchPage: React.FC = () => {
                     onClick={handleToggleFavorite}
                     className="ml-4"
                   >
-                    <Heart className={`w-4 h-4 mr-2 ${isFavorite ? 'fill-current' : ''}`} />
-                    {isFavorite ? 'Đã yêu thích' : 'Yêu thích'}
+                    <Heart className={`w-4 h-4 mr-2 ${isFavorite ? "fill-current" : ""}`} />
+                    {isFavorite ? "Đã yêu thích" : "Yêu thích"}
                   </Button>
                 )}
               </div>
 
-              {/* Description */}
               {movie.Description && (
                 <p className="text-gray-600 dark:text-gray-300 text-sm mb-4 leading-relaxed">
                   {movie.Description}
                 </p>
               )}
 
-              {/* Rating & View Count */}
               <div className="flex items-center gap-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex-wrap">
                 <div className="flex items-center gap-2">
                   <span className="text-2xl">⭐</span>
@@ -426,12 +409,12 @@ export const WatchPage: React.FC = () => {
                 {email && (
                   <div className="flex items-center gap-1">
                     <span className="text-sm text-gray-600 dark:text-gray-400 mr-2">Đánh giá:</span>
-                    {[1,2,3,4,5].map(n => (
+                    {[1, 2, 3, 4, 5].map(n => (
                       <button
                         key={n}
                         onClick={() => handleRate(n)}
                         className={`text-2xl transition-transform hover:scale-110 ${
-                          n <= myRating ? 'text-yellow-400' : 'text-gray-300 dark:text-gray-600'
+                          n <= myRating ? "text-yellow-400" : "text-gray-300 dark:text-gray-600"
                         }`}
                         aria-label={`rate-${n}`}
                       >
@@ -461,9 +444,8 @@ export const WatchPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Comments */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-              <CommentSection 
+              <CommentSection
                 contentType="movie"
                 contentId={Number(movie.MovieID)}
                 contentTitle={movie.Title}
@@ -471,7 +453,6 @@ export const WatchPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Episode list */}
           <div className="lg:col-span-1">
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
               <div className="px-4 py-3 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
@@ -505,8 +486,8 @@ export const WatchPage: React.FC = () => {
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <div className={`font-semibold text-sm ${
-                                isActive 
-                                  ? "text-blue-700 dark:text-blue-300" 
+                                isActive
+                                  ? "text-blue-700 dark:text-blue-300"
                                   : "text-gray-900 dark:text-white"
                               }`}>
                                 {formatEpisodeTitle(ep)}
@@ -550,10 +531,3 @@ export const WatchPage: React.FC = () => {
 };
 
 export default WatchPage;
-
-
-
-
-
-
-

@@ -45,13 +45,13 @@ const mockAuth = {
         body: JSON.stringify({
           email,
           password,
-          username: options?.data?.username,
-          fullName: options?.data?.full_name,
+          displayName: options?.data?.full_name || options?.data?.username || email?.split('@')?.[0],
         }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        return { data: null, error: { message: j.error || 'Registration failed' } };
+        const fieldMessage = j?.fields ? Object.values(j.fields)[0] : null;
+        return { data: null, error: { message: fieldMessage || j.message || j.error || 'Registration failed' } };
       }
       // Do not auto-login on sign up to match current UI flow
       return { data: { user: null }, error: null };

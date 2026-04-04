@@ -1,4 +1,4 @@
-﻿package com.fimory.api.crawl;
+package com.fimory.api.crawl;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;

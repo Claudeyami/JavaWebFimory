@@ -702,12 +702,13 @@ export interface ExperienceRewardResponse {
 export async function awardMovieWatchExp(
   email: string,
   movieId: number,
-  watchedSeconds: number
+  watchedSeconds: number,
+  episodeId?: number
 ): Promise<ExperienceRewardResponse> {
   const res = await fetch(`${API_BASE}/experience/movie-watch`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, movieId, watchedSeconds }),
+    body: JSON.stringify({ email, movieId, watchedSeconds, episodeId }),
   });
   if (!res.ok) throw new Error("Failed to award movie watch EXP");
   return res.json();

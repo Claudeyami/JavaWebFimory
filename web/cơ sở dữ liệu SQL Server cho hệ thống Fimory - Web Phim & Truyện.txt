@@ -1835,3 +1835,128 @@ PRINT N'🚀 Hệ thống đã sẵn sàng hỗ trợ crawl phim từ trang VN!'
 PRINT N'';
 GO
 
+
+
+Cập nhật sql 
+USE Fimory;
+GO
+
+PRINT N'Đang fix lỗi thiếu cột CurrentLevel...';
+
+-- 1. Ép thêm cột CurrentLevel vào bảng UserExp đã có sẵn
+IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UserExp' AND COLUMN_NAME = 'CurrentLevel')
+BEGIN
+    ALTER TABLE UserExp ADD CurrentLevel INT NOT NULL DEFAULT 1;
+    PRINT N'✅ Đã sửa lỗi: Thêm cột CurrentLevel vào bảng UserExp thành công!';
+END
+ELSE
+BEGIN
+    PRINT N'✅ Bảng UserExp đã có cột CurrentLevel!';
+END
+GO
+
+PRINT N'Đang tạo lại Stored Procedures...';
+GO
+
+-- 2. Tạo lại SP cho Phim
+CREATE OR ALTER PROCEDURE sp_Fimory_WatchEpisode_AddExp
+    @p_UserID INT,
+    @p_EpisodeID INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM UserWatchedEpisodes WHERE UserID = @p_UserID AND EpisodeID = @p_EpisodeID)
+    BEGIN
+        BEGIN TRY
+            BEGIN TRANSACTION;
+
+            INSERT INTO UserWatchedEpisodes (UserID, EpisodeID, Watched) 
+            VALUES (@p_UserID, @p_EpisodeID, 1);
+
+            IF NOT EXISTS (SELECT 1 FROM UserExp WHERE UserID = @p_UserID)
+            BEGIN
+                INSERT INTO UserExp (UserID, TotalExp, MaxExp, CurrentLevel) 
+                VALUES (@p_UserID, 0, 100, 1);
+            END
+
+            UPDATE UserExp SET TotalExp = TotalExp + 10 WHERE UserID = @p_UserID;
+
+            WHILE (SELECT TotalExp FROM UserExp WHERE UserID = @p_UserID) >= (SELECT MaxExp FROM UserExp WHERE UserID = @p_UserID)
+            BEGIN
+                UPDATE UserExp
+                SET 
+                    TotalExp = TotalExp - MaxExp,
+                    CurrentLevel = CurrentLevel + 1,
+                    MaxExp = MaxExp + 50
+                WHERE UserID = @p_UserID;
+            END
+
+            UPDATE Users SET Points = Points + 10 WHERE UserID = @p_UserID;
+            
+            INSERT INTO PointTransactions (UserID, Points, Type, Description)
+            VALUES (@p_UserID, 10, 'WatchEpisode', N'Nhận 10 EXP và 10 Điểm thưởng từ việc xem xong Tập ID: ' + CAST(@p_EpisodeID AS NVARCHAR));
+
+            COMMIT TRANSACTION;
+        END TRY
+        BEGIN CATCH
+            IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+            THROW;
+        END CATCH
+    END
+END;
+GO
+
+-- 3. Tạo lại SP cho Truyện
+CREATE OR ALTER PROCEDURE sp_Fimory_ReadChapter_AddExp
+    @p_UserID INT,
+    @p_ChapterID INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM UserReadChapters WHERE UserID = @p_UserID AND ChapterID = @p_ChapterID)
+    BEGIN
+        BEGIN TRY
+            BEGIN TRANSACTION;
+
+            INSERT INTO UserReadChapters (UserID, ChapterID, [Read]) 
+            VALUES (@p_UserID, @p_ChapterID, 1);
+
+            IF NOT EXISTS (SELECT 1 FROM UserExp WHERE UserID = @p_UserID)
+            BEGIN
+                INSERT INTO UserExp (UserID, TotalExp, MaxExp, CurrentLevel) 
+                VALUES (@p_UserID, 0, 100, 1);
+            END
+
+            UPDATE UserExp SET TotalExp = TotalExp + 5 WHERE UserID = @p_UserID;
+
+            WHILE (SELECT TotalExp FROM UserExp WHERE UserID = @p_UserID) >= (SELECT MaxExp FROM UserExp WHERE UserID = @p_UserID)
+            BEGIN
+                UPDATE UserExp
+                SET 
+                    TotalExp = TotalExp - MaxExp, 
+                    CurrentLevel = CurrentLevel + 1, 
+                    MaxExp = MaxExp + 50
+                WHERE UserID = @p_UserID;
+            END
+
+            UPDATE Users SET Points = Points + 5 WHERE UserID = @p_UserID;
+            
+            INSERT INTO PointTransactions (UserID, Points, Type, Description)
+            VALUES (@p_UserID, 5, 'ReadChapter', N'Nhận 5 EXP và 5 Điểm thưởng từ việc đọc xong Chapter ID: ' + CAST(@p_ChapterID AS NVARCHAR));
+
+            COMMIT TRANSACTION;
+        END TRY
+        BEGIN CATCH
+            IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+            THROW;
+        END CATCH
+    END
+END;
+GO
+
+PRINT N'========================================';
+PRINT N'✅ HOÀN TẤT FIX LỖI!';
+PRINT N'========================================';
+GO
