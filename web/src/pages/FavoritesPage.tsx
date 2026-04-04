@@ -1,4 +1,4 @@
-﻿import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { fetchFavorites, removeFavorite } from '../lib/api';
 import { fetchMovies, ApiMovie } from '../lib/api';
