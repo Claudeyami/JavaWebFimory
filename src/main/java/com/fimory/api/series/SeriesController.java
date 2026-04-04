@@ -47,12 +47,12 @@ public class SeriesController {
 
     @GetMapping("/stories/{slug}")
     public ResponseEntity<ApiResponse<SeriesDto>> detail(@PathVariable String slug) {
-        return ResponseEntity.ok(ApiResponse.ok(seriesService.getStoryBySlug(slug)));
+        return ResponseEntity.ok(ApiResponse.ok(seriesService.getStoryBySlug(slug, currentUserOrNull())));
     }
 
     @GetMapping("/stories/{seriesId}/chapters")
     public ResponseEntity<ApiResponse<List<ChapterDto>>> chapters(@PathVariable Long seriesId) {
-        return ResponseEntity.ok(ApiResponse.ok(seriesService.getChapters(seriesId)));
+        return ResponseEntity.ok(ApiResponse.ok(seriesService.getChapters(seriesId, currentUserOrNull())));
     }
 
     @GetMapping("/search")
@@ -103,12 +103,12 @@ public class SeriesController {
 
     @GetMapping("/stories/{seriesId}/categories")
     public ResponseEntity<ApiResponse<List<CategoryDto>>> storyCategories(@PathVariable Long seriesId) {
-        return ResponseEntity.ok(ApiResponse.ok(seriesService.getCategoriesBySeries(seriesId)));
+        return ResponseEntity.ok(ApiResponse.ok(seriesService.getCategoriesBySeries(seriesId, currentUserOrNull())));
     }
 
     @GetMapping("/stories/{seriesId}/tags")
     public ResponseEntity<ApiResponse<List<Map<String, String>>>> storyTags(@PathVariable Long seriesId) {
-        return ResponseEntity.ok(ApiResponse.ok(seriesService.getTagsBySeries(seriesId)));
+        return ResponseEntity.ok(ApiResponse.ok(seriesService.getTagsBySeries(seriesId, currentUserOrNull())));
     }
 
     @GetMapping("/stories/{seriesId}/user-rating")
@@ -176,5 +176,13 @@ public class SeriesController {
             return false;
         }
         return value.toLowerCase(Locale.ROOT).contains(keyword);
+    }
+
+    private AuthenticatedUser currentUserOrNull() {
+        try {
+            return currentUserProvider.requireUser();
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 }

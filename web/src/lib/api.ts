@@ -645,7 +645,8 @@ export async function adminListStories(email: string): Promise<any[]> {
     headers: { "x-user-email": email },
   });
   if (!res.ok) throw new Error("Failed to load stories");
-  return res.json();
+  const payload = await res.json();
+  return Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : []);
 }
 
 export async function adminUpdateStory(
@@ -678,6 +679,60 @@ export async function adminDeleteStory(
     headers: { "x-user-email": email },
   });
   if (!res.ok) throw new Error("Failed to delete story");
+}
+
+export type AdminModerationStory = {
+  SeriesID: number;
+  Title: string;
+  Slug?: string;
+  CoverURL?: string;
+  Status?: string;
+  UploaderID?: number;
+  UploaderName?: string;
+  UploaderEmail?: string;
+  JobID?: number;
+  JobStatus?: string;
+  Decision?: string;
+  LastError?: string;
+  JobCreatedAt?: string;
+  JobUpdatedAt?: string;
+  Evidence?: {
+    ResultID: number;
+    Category?: string;
+    ConfidenceScore?: number | string;
+    EvidenceType?: string;
+    EvidencePath?: string;
+    CreatedAt?: string;
+    RawResponse?: string;
+    ParsedResponse?: Record<string, string>;
+  }[];
+};
+
+export async function adminListModerationStories(email: string): Promise<AdminModerationStory[]> {
+  const res = await fetch(`${API_BASE}/admin/moderation/stories`, {
+    headers: { "x-user-email": email },
+  });
+  if (!res.ok) throw new Error("Failed to load moderation stories");
+  const payload = await res.json();
+  return Array.isArray(payload) ? payload : (Array.isArray(payload?.data) ? payload.data : []);
+}
+
+export async function adminWarnStory(email: string, id: number, reason: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/moderation/stories/${id}/warn`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-user-email": email },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new Error("Failed to warn uploader");
+}
+
+export async function adminWarnAndRemoveStory(email: string, id: number, reason: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/admin/moderation/stories/${id}/warn-remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-user-email": email },
+    body: JSON.stringify({ reason }),
+  });
+  if (!res.ok) throw new Error("Failed to warn and remove story");
 }
 
 // ===== Experience System =====

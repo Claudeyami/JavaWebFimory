@@ -5,6 +5,7 @@ import com.fimory.api.category.CategoryDto;
 import com.fimory.api.domain.SeriesEntity;
 import com.fimory.api.repository.ChapterRepository;
 import com.fimory.api.repository.SeriesRepository;
+import com.fimory.api.security.AuthenticatedUser;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -63,33 +64,70 @@ public class SeriesService {
                     FROM Chapters
                     GROUP BY SeriesID
                 ) ch ON ch.SeriesID = s.SeriesID
+                WHERE s.Status = 'Approved'
                 ORDER BY s.CreatedAt DESC
                 """;
-        return jdbcTemplate.query(sql, (rs, rowNum) -> new SeriesDto(
-                rs.getLong("SeriesID"),
-                rs.getString("Slug"),
-                rs.getString("Title"),
-                rs.getString("Description"),
-                rs.getString("CoverURL"),
-                rs.getString("Status") == null ? "Pending" : rs.getString("Status"),
-                rs.getObject("IsFree") == null || rs.getBoolean("IsFree"),
-                rs.getObject("UploaderID") != null ? rs.getLong("UploaderID") : null,
-                rs.getString("UploaderName"),
-                rs.getString("UploaderEmail"),
-                rs.getString("UploaderRole"),
-                rs.getString("StoryType") == null ? "Text" : rs.getString("StoryType"),
-                rs.getObject("CreatedAt") != null ? String.valueOf(rs.getObject("CreatedAt")) : null,
-                rs.getObject("UpdatedAt") != null ? String.valueOf(rs.getObject("UpdatedAt")) : null,
-                rs.getString("Author"),
-                rs.getObject("ViewCount") == null ? 0 : rs.getInt("ViewCount"),
-                rs.getObject("Rating") == null ? 0.0 : rs.getDouble("Rating"),
-                rs.getObject("TotalRatings") == null ? 0 : rs.getInt("TotalRatings"),
-                rs.getObject("CommentCount") == null ? 0 : rs.getInt("CommentCount"),
-                rs.getObject("LatestChapterNumber") == null ? 0 : rs.getInt("LatestChapterNumber")
-        ));
+        return jdbcTemplate.query(sql, (rs, rowNum) -> mapSeriesRow(rs));
+    }
+
+    public List<SeriesDto> getStoriesForAdmin() {
+        boolean hasModerationJobs = tableExists("ContentModerationJobs");
+        String sql = """
+                SELECT s.SeriesID, s.Slug, s.Title, s.Description, s.CoverURL, s.Status, s.IsFree, s.StoryType,
+                       s.Author, COALESCE(s.ViewCount, 0) AS ViewCount,
+                       COALESCE(sr.avgRating, 0) AS Rating,
+                       COALESCE(sr.totalRatings, 0) AS TotalRatings,
+                       COALESCE(sc.commentCount, 0) AS CommentCount,
+                       COALESCE(ch.latestChapterNumber, 0) AS LatestChapterNumber,
+                       s.UploaderID, s.CreatedAt, s.UpdatedAt,
+                       u.Username AS UploaderName, u.Email AS UploaderEmail, r.RoleName AS UploaderRole
+                FROM Series s
+                LEFT JOIN Users u ON u.UserID = s.UploaderID
+                LEFT JOIN Roles r ON r.RoleID = u.RoleID
+                LEFT JOIN (
+                    SELECT SeriesID, AVG(CAST(Rating AS FLOAT)) AS avgRating, COUNT(1) AS totalRatings
+                    FROM SeriesRatings
+                    GROUP BY SeriesID
+                ) sr ON sr.SeriesID = s.SeriesID
+                LEFT JOIN (
+                    SELECT SeriesID, COUNT(1) AS commentCount
+                    FROM SeriesComments
+                    GROUP BY SeriesID
+                ) sc ON sc.SeriesID = s.SeriesID
+                LEFT JOIN (
+                    SELECT SeriesID, MAX(ChapterNumber) AS latestChapterNumber
+                    FROM Chapters
+                    GROUP BY SeriesID
+                ) ch ON ch.SeriesID = s.SeriesID
+                """;
+        if (hasModerationJobs) {
+            sql += """
+                    OUTER APPLY (
+                        SELECT TOP 1 JobID, Status AS ModerationStatus, Decision AS ModerationDecision
+                        FROM ContentModerationJobs
+                        WHERE ContentType = 'Series' AND ContentID = s.SeriesID
+                        ORDER BY CreatedAt DESC, JobID DESC
+                    ) mj
+                    WHERE UPPER(COALESCE(r.RoleName, '')) = 'ADMIN'
+                       OR s.Status <> 'Pending'
+                       OR (COALESCE(mj.ModerationStatus, '') = 'Completed' AND COALESCE(mj.ModerationDecision, 'NONE') = 'ALLOW')
+                    ORDER BY s.CreatedAt DESC
+                    """;
+        } else {
+            sql += " ORDER BY s.CreatedAt DESC";
+        }
+        return jdbcTemplate.query(sql, (rs, rowNum) -> mapSeriesRow(rs));
     }
 
     public SeriesDto getStoryBySlug(String slug) {
+        return getStoryBySlug(slug, null);
+    }
+
+    public SeriesDto getStoryBySlug(String slug, AuthenticatedUser viewer) {
+        SeriesEntity series = seriesRepository.findBySlug(slug)
+                .orElseThrow(() -> new NotFoundException("Story not found"));
+        assertStoryVisible(series, viewer);
+
         String sql = """
                 SELECT TOP 1 s.SeriesID, s.Slug, s.Title, s.Description, s.CoverURL, s.Status, s.IsFree, s.StoryType,
                        s.Author, COALESCE(s.ViewCount, 0) AS ViewCount,
@@ -148,6 +186,14 @@ public class SeriesService {
     }
 
     public List<ChapterDto> getChapters(Long seriesId) {
+        return getChapters(seriesId, null);
+    }
+
+    public List<ChapterDto> getChapters(Long seriesId, AuthenticatedUser viewer) {
+        SeriesEntity series = seriesRepository.findById(seriesId)
+                .orElseThrow(() -> new NotFoundException("Story not found"));
+        assertStoryVisible(series, viewer);
+
         boolean hasContent = columnExists("Chapters", "Content");
         boolean hasIsFree = columnExists("Chapters", "IsFree");
         boolean hasCreatedAt = columnExists("Chapters", "CreatedAt");
@@ -208,6 +254,7 @@ public class SeriesService {
                 FROM Series s
                 INNER JOIN SeriesCategories sc ON sc.SeriesID = s.SeriesID
                 WHERE sc.CategoryID = ?
+                  AND s.Status = 'Approved'
                 ORDER BY s.CreatedAt DESC
                 """;
         return jdbcTemplate.query(sql, (rs, rowNum) -> new SeriesDto(
@@ -220,6 +267,14 @@ public class SeriesService {
     }
 
     public List<CategoryDto> getCategoriesBySeries(Long seriesId) {
+        return getCategoriesBySeries(seriesId, null);
+    }
+
+    public List<CategoryDto> getCategoriesBySeries(Long seriesId, AuthenticatedUser viewer) {
+        SeriesEntity series = seriesRepository.findById(seriesId)
+                .orElseThrow(() -> new NotFoundException("Story not found"));
+        assertStoryVisible(series, viewer);
+
         String nameColumn = resolveCategoryNameColumn();
         String sql = "SELECT c.CategoryID, c." + nameColumn + " AS CategoryName, c.Slug " +
                 "FROM Categories c INNER JOIN SeriesCategories sc ON sc.CategoryID = c.CategoryID " +
@@ -232,6 +287,14 @@ public class SeriesService {
     }
 
     public List<Map<String, String>> getTagsBySeries(Long seriesId) {
+        return getTagsBySeries(seriesId, null);
+    }
+
+    public List<Map<String, String>> getTagsBySeries(Long seriesId, AuthenticatedUser viewer) {
+        SeriesEntity series = seriesRepository.findById(seriesId)
+                .orElseThrow(() -> new NotFoundException("Story not found"));
+        assertStoryVisible(series, viewer);
+
         String sql = """
                 SELECT t.TagID, t.TagName, t.Slug
                 FROM Tags t
@@ -390,6 +453,31 @@ public class SeriesService {
         );
     }
 
+    private SeriesDto mapSeriesRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new SeriesDto(
+                rs.getLong("SeriesID"),
+                rs.getString("Slug"),
+                rs.getString("Title"),
+                rs.getString("Description"),
+                rs.getString("CoverURL"),
+                rs.getString("Status") == null ? "Pending" : rs.getString("Status"),
+                rs.getObject("IsFree") == null || rs.getBoolean("IsFree"),
+                rs.getObject("UploaderID") != null ? rs.getLong("UploaderID") : null,
+                rs.getString("UploaderName"),
+                rs.getString("UploaderEmail"),
+                rs.getString("UploaderRole"),
+                rs.getString("StoryType") == null ? "Text" : rs.getString("StoryType"),
+                rs.getObject("CreatedAt") != null ? String.valueOf(rs.getObject("CreatedAt")) : null,
+                rs.getObject("UpdatedAt") != null ? String.valueOf(rs.getObject("UpdatedAt")) : null,
+                rs.getString("Author"),
+                rs.getObject("ViewCount") == null ? 0 : rs.getInt("ViewCount"),
+                rs.getObject("Rating") == null ? 0.0 : rs.getDouble("Rating"),
+                rs.getObject("TotalRatings") == null ? 0 : rs.getInt("TotalRatings"),
+                rs.getObject("CommentCount") == null ? 0 : rs.getInt("CommentCount"),
+                rs.getObject("LatestChapterNumber") == null ? 0 : rs.getInt("LatestChapterNumber")
+        );
+    }
+
     @Transactional
     public void replaceSeriesCategories(Long seriesId, List<Long> categoryIds) {
         jdbcTemplate.update("DELETE FROM SeriesCategories WHERE SeriesID = ?", seriesId);
@@ -528,5 +616,32 @@ public class SeriesService {
             return null;
         }
         return resolved;
+    }
+
+    private void assertStoryVisible(SeriesEntity series, AuthenticatedUser viewer) {
+        if (series == null) {
+            throw new NotFoundException("Story not found");
+        }
+        if (isApproved(series.getStatus())) {
+            return;
+        }
+        if (viewer != null && (isAdmin(viewer) || viewerOwnsStory(viewer, series))) {
+            return;
+        }
+        throw new NotFoundException("Story not found");
+    }
+
+    private boolean isApproved(String status) {
+        return status != null && "approved".equalsIgnoreCase(status.trim());
+    }
+
+    private boolean isAdmin(AuthenticatedUser viewer) {
+        return viewer.role() != null && "admin".equalsIgnoreCase(viewer.role().trim());
+    }
+
+    private boolean viewerOwnsStory(AuthenticatedUser viewer, SeriesEntity series) {
+        return viewer.userId() != null
+                && series.getUploaderId() != null
+                && viewer.userId().equals(series.getUploaderId());
     }
 }

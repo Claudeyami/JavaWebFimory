@@ -1,4 +1,4 @@
-﻿package com.fimory.api.crawl;
+package com.fimory.api.crawl;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -53,7 +53,7 @@ public class CrawlStoryService {
     private static final Pattern IMG_TAG_PATTERN = Pattern.compile("<img\\s+[^>]*>", Pattern.CASE_INSENSITIVE);
     private static final Pattern A_TAG_PATTERN = Pattern.compile("<a\\s+[^>]*href\\s*=\\s*([\"'])(.*?)\\1[^>]*>(.*?)</a>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern STRIP_TAGS_PATTERN = Pattern.compile("<[^>]+>");
-    private static final Pattern CHAPTER_NUM_PATTERN = Pattern.compile("(?:chap(?:ter)?|chuong|chÆ°Æ¡ng|tap|táº­p|ep(?:isode)?)\\s*[-.:#]?\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern CHAPTER_NUM_PATTERN = Pattern.compile("(?:chap(?:ter)?|chuong|chương|tap|tập|ep(?:isode)?)\\s*[-.:#]?\\s*(\\d+)", Pattern.CASE_INSENSITIVE);
     private static final Pattern NUMBER_PATTERN = Pattern.compile("(\\d+)");
 
     private final HttpClient httpClient;
@@ -97,7 +97,7 @@ public class CrawlStoryService {
                 errors.add("[" + siteName(site) + "] " + ex.getMessage());
             }
         }
-        throw new IllegalStateException("KhÃ´ng crawl Ä‘Æ°á»£c truyá»‡n: " + String.join(" | ", errors));
+        throw new IllegalStateException("Không crawl được truyện: " + String.join(" | ", errors));
     }
 
     public Map<String, Object> crawlChapter(Map<String, Object> payload) {
@@ -125,7 +125,7 @@ public class CrawlStoryService {
                 String html = fetchHtml(chapterUrl, 15000);
                 List<String> images = parseChapterImages(site, html, chapterUrl);
                 if (images.isEmpty()) {
-                    errors.add("[" + siteName(site) + "] KhÃ´ng tÃ¬m tháº¥y áº£nh");
+                    errors.add("[" + siteName(site) + "] Không tìm thấy ảnh");
                     continue;
                 }
 
@@ -150,7 +150,7 @@ public class CrawlStoryService {
                 errors.add("[" + siteName(site) + "] " + ex.getMessage());
             }
         }
-        throw new IllegalStateException("KhÃ´ng crawl Ä‘Æ°á»£c chapter: " + String.join(" | ", errors));
+        throw new IllegalStateException("Không crawl được chapter: " + String.join(" | ", errors));
     }
 
     public Map<String, Object> cleanupTemporaryAssets(Map<String, Object> payload) {
@@ -231,7 +231,7 @@ public class CrawlStoryService {
         title = normalizeExtractedText(title);
 
         String author = firstNonBlank(
-                extractTextAfterLabel(html, "TÃ¡c giáº£"),
+                extractTextAfterLabel(html, "Tác giả"),
                 extractTagByClass(html, "author"),
                 extractTagByClass(html, "book-author")
         );
@@ -370,9 +370,9 @@ public class CrawlStoryService {
                 || lowerHref.contains("chapter")
                 || lowerHref.contains("/tap-")
                 || lowerText.contains("chap")
-                || lowerText.contains("chÆ°Æ¡ng")
+                || lowerText.contains("chương")
                 || lowerText.contains("chuong")
-                || lowerText.contains("táº­p")
+                || lowerText.contains("tập")
                 || lowerText.contains("tap");
     }
 
@@ -1105,4 +1105,3 @@ public class CrawlStoryService {
     private record SaveImagesResult(List<String> savedImages, String storageFolder) {
     }
 }
-

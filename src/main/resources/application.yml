@@ -46,7 +46,8 @@ app:
     dynamic-watermark-mode: FRONTEND_OVERLAY
   integration:
     gemini:
-      api-key: ${GEMINI_API_KEY:}
+      chat-api-key: ${GEMINI_CHAT_KEY:${GEMINI_API_KEY:}}
+      moderation-api-key: ${GEMINI_MODERATION_KEY:}
     email:
       user: ${EMAIL_USER:}
       password: ${EMAIL_PASSWORD:}

@@ -17,14 +17,23 @@ public class IntegrationProperties {
     }
 
     public static class Gemini {
-        private String apiKey = "";
+        private String chatApiKey = "";
+        private String moderationApiKey = "";
 
-        public String getApiKey() {
-            return apiKey;
+        public String getChatApiKey() {
+            return chatApiKey;
         }
 
-        public void setApiKey(String apiKey) {
-            this.apiKey = apiKey;
+        public void setChatApiKey(String chatApiKey) {
+            this.chatApiKey = chatApiKey;
+        }
+
+        public String getModerationApiKey() {
+            return moderationApiKey;
+        }
+
+        public void setModerationApiKey(String moderationApiKey) {
+            this.moderationApiKey = moderationApiKey;
         }
     }
 

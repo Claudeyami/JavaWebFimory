@@ -41,9 +41,9 @@ public class GeminiChatService {
     }
 
     public JsonNode generateContent(List<Map<String, Object>> contents) throws IOException, InterruptedException {
-        String apiKey = integrationProperties.getGemini().getApiKey();
+        String apiKey = integrationProperties.getGemini().getChatApiKey();
         if (apiKey == null || apiKey.isBlank()) {
-            throw new IllegalStateException("GEMINI_API_KEY chua duoc cau hinh.");
+            throw new IllegalStateException("GEMINI_CHAT_KEY chua duoc cau hinh.");
         }
         if (contents == null || contents.isEmpty()) {
             throw new IllegalArgumentException("Noi dung hoi thoai trong.");

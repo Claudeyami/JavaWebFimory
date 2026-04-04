@@ -18,7 +18,8 @@
 - `SQL_PASSWORD` (no default in repo, must set in local env)
 - `UPLOAD_DIR` (default: `uploads`)
 - `TMDB_API_KEY` (for crawl module - TODO in current MVP)
-- `GEMINI_API_KEY` (chatbot Gemini)
+- `GEMINI_CHAT_KEY` (Gemini key cho chatbot)
+- `GEMINI_MODERATION_KEY` (Gemini key cho moderation AI)
 - `EMAIL_USER` (SMTP account for email features)
 - `EMAIL_PASSWORD` (SMTP app password)
 

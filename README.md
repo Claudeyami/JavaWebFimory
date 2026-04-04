@@ -1,4 +1,4 @@
-﻿# 1. Giới thiệu dự án
+# 1. Giới thiệu dự án
 
 - **Fimory** là hệ thống web quản lý và phân phối **phim + truyện** (truyện chữ và truyện tranh), gồm backend Java Spring Boot, frontend React/Vite và cơ sở dữ liệu SQL Server.
 - Dự án hỗ trợ các luồng thực tế:
@@ -185,7 +185,8 @@ Chạy trong **PowerShell**, tại **thư mục gốc backend** (`JavaWebFimory`
 $env:SQL_URL="jdbc:sqlserver://<TEN_SERVER>\<TEN_INSTANCE>;databaseName=<TEN_DATABASE>;encrypt=false;trustServerCertificate=true"
 $env:SQL_USER="<TEN_USER_SQL>"
 $env:SQL_PASSWORD="<MAT_KHAU_SQL>"
-$env:GEMINI_API_KEY="AIzaSyDCKib4w3nmlCvLkVXCk3LWUS-fUc14oWE"
+$env:GEMINI_CHAT_KEY="AIzaSyDCKib4w3nmlCvLkVXCk3LWUS-fUc14oWE"
+$env:GEMINI_MODERATION_KEY="your_moderation_key"
 $env:EMAIL_USER="hoangthanhsangdp@gmail.com"
 $env:EMAIL_PASSWORD="qtxzvfrfjziwwcrc"
 ```
@@ -197,7 +198,8 @@ $env:EMAIL_PASSWORD="qtxzvfrfjziwwcrc"
     - `<TEN_DATABASE>`: tên DB cần dùng (thường là `Fimory`).
   - `SQL_USER`: tài khoản SQL login.
   - `SQL_PASSWORD`: mật khẩu SQL login.
-  - `GEMINI_API_KEY`: API key dùng cho chatbot Gemini.
+  - `GEMINI_CHAT_KEY`: API key dùng cho chatbot Gemini.
+  - `GEMINI_MODERATION_KEY`: API key dành riêng cho moderation AI.
   - `EMAIL_USER`: tài khoản email gửi mail.
   - `EMAIL_PASSWORD`: app password của email.
 - Thay placeholder bằng giá trị thật của máy bạn trước khi chạy backend.

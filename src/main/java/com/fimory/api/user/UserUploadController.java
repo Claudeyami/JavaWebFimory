@@ -1,4 +1,4 @@
-﻿package com.fimory.api.user;
+package com.fimory.api.user;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -8,6 +8,7 @@ import com.fimory.api.common.UnauthorizedException;
 import com.fimory.api.movie.MovieDto;
 import com.fimory.api.movie.MovieService;
 import com.fimory.api.movie.MovieUpsertRequest;
+import com.fimory.api.moderation.ModerationJobService;
 import com.fimory.api.security.AuthenticatedUser;
 import com.fimory.api.security.CurrentUserProvider;
 import com.fimory.api.series.SeriesDto;
@@ -37,6 +38,7 @@ public class UserUploadController {
     private final CurrentUserProvider currentUserProvider;
     private final MovieService movieService;
     private final SeriesService seriesService;
+    private final ModerationJobService moderationJobService;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final String uploadDir;
@@ -44,12 +46,14 @@ public class UserUploadController {
     public UserUploadController(CurrentUserProvider currentUserProvider,
                                 MovieService movieService,
                                 SeriesService seriesService,
+                                ModerationJobService moderationJobService,
                                 JdbcTemplate jdbcTemplate,
                                 ObjectMapper objectMapper,
                                 @Value("${app.storage.upload-dir:uploads}") String uploadDir) {
         this.currentUserProvider = currentUserProvider;
         this.movieService = movieService;
         this.seriesService = seriesService;
+        this.moderationJobService = moderationJobService;
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.uploadDir = uploadDir;
@@ -125,7 +129,7 @@ public class UserUploadController {
                 if (i < metas.size() && metas.get(i).episodeNumber() != null && metas.get(i).episodeNumber() > 0) {
                     episodeNo = metas.get(i).episodeNumber();
                 }
-                String episodeTitle = "Táº­p " + episodeNo;
+                String episodeTitle = "Tập " + episodeNo;
                 if (i < metas.size() && metas.get(i).title() != null && !metas.get(i).title().isBlank()) {
                     episodeTitle = metas.get(i).title().trim();
                 }
@@ -134,13 +138,13 @@ public class UserUploadController {
         }
         notifyAdmins(
                 "NewContent",
-                "CÃ³ phim má»›i chá» duyá»‡t",
-                "NgÆ°á»i dÃ¹ng " + current.email() + " vá»«a upload phim \"" + created.title() + "\".",
+                "Có phim mới chờ duyệt",
+                "Người dùng " + current.email() + " vừa upload phim \"" + created.title() + "\".",
                 "/admin/movies"
         );
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(Map.of(
                 "success", true,
-                "message", "Upload thÃ nh cÃ´ng. Phim Ä‘ang chá» duyá»‡t.",
+                "message", "Upload thành công. Phim đang chờ duyệt.",
                 "movieId", created.id()
         )));
     }
@@ -232,8 +236,11 @@ public class UserUploadController {
                                                                         @RequestParam(required = false) String author,
                                                                         @RequestParam(required = false) String storyType,
                                                                         @RequestParam(required = false) Boolean isFree,
+                                                                        @RequestParam(required = false) String chapters,
                                                                         @RequestParam(required = false) List<Long> categoryIds,
-                                                                        @RequestPart(required = false) MultipartFile coverImage) {
+                                                                        @RequestPart(required = false) MultipartFile coverImage,
+                                                                        @RequestPart(required = false) List<MultipartFile> contentFiles,
+                                                                        @RequestPart(required = false) List<MultipartFile> chapterImages) {
         AuthenticatedUser current = currentUserProvider.requireUser();
         String slug = slugify(title);
         String coverUrl = (coverImage != null && !coverImage.isEmpty()) ? storeFile(coverImage, "covers") : null;
@@ -251,16 +258,25 @@ public class UserUploadController {
                 isFree,
                 created.id()
         );
+        int chapterCount = createInitialStoryChapters(
+                created.id(),
+                storyType,
+                contentFiles,
+                chapterImages,
+                chapters
+        );
         notifyAdmins(
                 "NewContent",
-                "CÃ³ truyá»‡n má»›i chá» duyá»‡t",
-                "NgÆ°á»i dÃ¹ng " + current.email() + " vá»«a upload truyá»‡n \"" + created.title() + "\".",
+                "Có truyện mới chờ duyệt",
+                "Người dùng " + current.email() + " vừa upload truyện \"" + created.title() + "\".",
                 "/admin/stories"
         );
+        enqueueStoryModeration(created.id(), true);
         return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(Map.of(
                 "success", true,
-                "message", "Upload thÃ nh cÃ´ng. Truyá»‡n Ä‘ang chá» duyá»‡t.",
-                "seriesId", created.id()
+                "message", "Upload thành công. Truyện đang chờ duyệt.",
+                "seriesId", created.id(),
+                "chapterCount", chapterCount
         )));
     }
 
@@ -354,12 +370,12 @@ public class UserUploadController {
 
         if (isComic && imagePaths.isEmpty()) {
             return ResponseEntity.badRequest().body(
-                    new ApiResponse<>(false, Map.of("error", "Truyá»‡n tranh cáº§n Ã­t nháº¥t má»™t áº£nh chÆ°Æ¡ng"), Map.of())
+                    new ApiResponse<>(false, Map.of("error", "Truyện tranh cần ít nhất một ảnh chương"), Map.of())
             );
         }
         if (!isComic && (contentFile == null || contentFile.isEmpty())) {
             return ResponseEntity.badRequest().body(
-                    new ApiResponse<>(false, Map.of("error", "Truyá»‡n chá»¯ cáº§n file ná»™i dung chÆ°Æ¡ng"), Map.of())
+                    new ApiResponse<>(false, Map.of("error", "Truyện chữ cần file nội dung chương"), Map.of())
             );
         }
 
@@ -371,6 +387,8 @@ public class UserUploadController {
         if (chapterId != null && columnExists("Chapters", "ImageCount")) {
             jdbcTemplate.update("UPDATE Chapters SET ImageCount = ? WHERE ChapterID = ?", imageCount, chapterId);
         }
+
+        enqueueStoryModeration(seriesId, chapterId != null);
 
         if (isSeriesApproved(seriesId)) {
             notifySeriesFavoritesNewChapter(seriesId, chapterTitle, chapterNumber);
@@ -428,6 +446,92 @@ public class UserUploadController {
                 rs -> rs.next() ? rs.getLong(1) : null,
                 seriesId, chapterNo
         );
+    }
+
+    private int createInitialStoryChapters(Long seriesId,
+                                           String storyType,
+                                           List<MultipartFile> contentFiles,
+                                           List<MultipartFile> chapterImages,
+                                           String chaptersJson) {
+        String normalizedStoryType = storyType == null ? "Text" : storyType.trim();
+        List<String> chapterTitles = parseChapterTitles(chaptersJson);
+        int created = 0;
+
+        if ("comic".equalsIgnoreCase(normalizedStoryType)) {
+            List<String> imagePaths = new ArrayList<>();
+            if (chapterImages != null) {
+                for (MultipartFile image : chapterImages) {
+                    if (image != null && !image.isEmpty()) {
+                        imagePaths.add(storeFile(image, "chapters"));
+                    }
+                }
+            }
+            if (imagePaths.isEmpty()) {
+                return 0;
+            }
+
+            Integer nextNo = jdbcTemplate.queryForObject(
+                    "SELECT COALESCE(MAX(ChapterNumber), 0) + 1 FROM Chapters WHERE SeriesID = ?",
+                    Integer.class,
+                    seriesId
+            );
+            int chapterNo = nextNo == null ? 1 : Math.max(1, nextNo);
+            String chapterTitle = chapterTitles.isEmpty() ? ("Chapter " + chapterNo) : chapterTitles.getFirst();
+            Long chapterId = insertStoryChapter(seriesId, chapterNo, chapterTitle, null, imagePaths.size());
+            if (chapterId != null) {
+                insertChapterImages(chapterId, imagePaths);
+                created++;
+            }
+            return created;
+        }
+
+        if (contentFiles == null || contentFiles.isEmpty()) {
+            return 0;
+        }
+
+        Integer nextNo = jdbcTemplate.queryForObject(
+                "SELECT COALESCE(MAX(ChapterNumber), 0) + 1 FROM Chapters WHERE SeriesID = ?",
+                Integer.class,
+                seriesId
+        );
+        int chapterNo = nextNo == null ? 1 : Math.max(1, nextNo);
+        for (int i = 0; i < contentFiles.size(); i++) {
+            MultipartFile file = contentFiles.get(i);
+            if (file == null || file.isEmpty()) {
+                continue;
+            }
+            String chapterTitle = i < chapterTitles.size() && chapterTitles.get(i) != null && !chapterTitles.get(i).isBlank()
+                    ? chapterTitles.get(i)
+                    : ("Chapter " + chapterNo);
+            String contentPath = storeFile(file, "chapters");
+            Long chapterId = insertStoryChapter(seriesId, chapterNo, chapterTitle, contentPath, 0);
+            if (chapterId != null) {
+                created++;
+            }
+            chapterNo++;
+        }
+        return created;
+    }
+
+    private List<String> parseChapterTitles(String chaptersJson) {
+        if (chaptersJson == null || chaptersJson.isBlank()) {
+            return List.of();
+        }
+        try {
+            JsonNode node = objectMapper.readTree(chaptersJson);
+            if (!node.isArray()) {
+                return List.of();
+            }
+            List<String> titles = new ArrayList<>();
+            for (JsonNode item : node) {
+                if (item != null && item.hasNonNull("title")) {
+                    titles.add(item.get("title").asText().trim());
+                }
+            }
+            return titles;
+        } catch (Exception ignored) {
+            return List.of();
+        }
     }
 
     private void insertChapterImages(Long chapterId, List<String> imagePaths) {
@@ -584,7 +688,7 @@ public class UserUploadController {
                 rs -> rs.next() ? rs.getString(1) : "phim",
                 movieId
         );
-        String ep = (episodeTitle == null || episodeTitle.isBlank()) ? "táº­p má»›i" : episodeTitle.trim();
+        String ep = (episodeTitle == null || episodeTitle.isBlank()) ? "tập mới" : episodeTitle.trim();
         String relatedUrl = slug == null || slug.isBlank() ? "/movies" : "/watch/" + slug;
         jdbcTemplate.update(
                 """
@@ -595,8 +699,8 @@ public class UserUploadController {
                 WHERE mf.MovieID = ? AND u.IsActive = 1
                 """,
                 "FavoriteUpdate",
-                "Phim báº¡n yÃªu thÃ­ch cÃ³ táº­p má»›i",
-                "Phim \"" + movieTitle + "\" vá»«a ra " + ep + ".",
+                "Phim bạn yêu thích có tập mới",
+                "Phim \"" + movieTitle + "\" vừa ra " + ep + ".",
                 relatedUrl,
                 movieId
         );
@@ -610,7 +714,7 @@ public class UserUploadController {
         );
         String storyTitle = jdbcTemplate.query(
                 "SELECT TOP 1 Title FROM Series WHERE SeriesID = ?",
-                rs -> rs.next() ? rs.getString(1) : "truyá»‡n",
+                rs -> rs.next() ? rs.getString(1) : "truyện",
                 seriesId
         );
         String chap = (chapterTitle == null || chapterTitle.isBlank()) ? ("Chapter " + chapterNumber) : chapterTitle.trim();
@@ -626,8 +730,8 @@ public class UserUploadController {
                 WHERE sf.SeriesID = ? AND u.IsActive = 1
                 """,
                 "FavoriteUpdate",
-                "Truyá»‡n báº¡n yÃªu thÃ­ch cÃ³ chÆ°Æ¡ng má»›i",
-                "Truyá»‡n \"" + storyTitle + "\" vá»«a ra " + chap + ".",
+                "Truyện bạn yêu thích có chương mới",
+                "Truyện \"" + storyTitle + "\" vừa ra " + chap + ".",
                 relatedUrl,
                 seriesId
         );
@@ -650,6 +754,13 @@ public class UserUploadController {
         );
     }
 
+    private void enqueueStoryModeration(Long seriesId, boolean shouldEnqueue) {
+        if (!shouldEnqueue || seriesId == null || !tableExists("ContentModerationJobs")) {
+            return;
+        }
+        moderationJobService.createJob(seriesId, "Series", 10);
+    }
+
     private boolean tableExists(String tableName) {
         Integer count = jdbcTemplate.queryForObject(
                 "SELECT COUNT(1) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ?",
@@ -669,5 +780,3 @@ public class UserUploadController {
         return count != null && count > 0;
     }
 }
-
-

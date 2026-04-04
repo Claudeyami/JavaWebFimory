@@ -3,7 +3,18 @@ import { useAuth } from '../hooks/useAuth';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Card } from '../components/ui/Card';
-import { fetchCategories, crawlStoryFromVN, crawlChapterImages, cleanupCrawlTempAssets, ChapterMeta } from '../lib/api';
+import {
+  fetchCategories,
+  crawlStoryFromVN,
+  crawlChapterImages,
+  cleanupCrawlTempAssets,
+  ChapterMeta,
+  adminListStories,
+  adminListModerationStories,
+  adminWarnStory,
+  adminWarnAndRemoveStory,
+  AdminModerationStory,
+} from '../lib/api';
 import { Upload, BookOpen, Crown, CheckCircle, Clock, AlertCircle, Download, Loader2 } from 'lucide-react';
 import { buildMediaUrl } from '../lib/config';
 
@@ -11,7 +22,9 @@ const AdminStoriesPage: React.FC = () => {
   const { user } = useAuth();
   const email = user?.email || '';
   const [items, setItems] = useState<any[]>([]);
+  const [violations, setViolations] = useState<AdminModerationStory[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingViolations, setLoadingViolations] = useState(false);
   const [userRole, setUserRole] = useState<string>('');
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState<{ 
@@ -142,16 +155,11 @@ const AdminStoriesPage: React.FC = () => {
     if (!email) return;
     setLoading(true);
     try {
-      const response = await fetch('/api/admin/stories', {
-        headers: { 'x-user-email': email }
-      });
-      if (response.ok) {
-        const rows = await response.json();
-        console.log('Loaded stories:', rows);
-        console.log('Admin uploads:', rows.filter((s: any) => s.UploaderRole && s.UploaderRole.trim() === 'Admin'));
-        console.log('User uploads:', rows.filter((s: any) => !s.UploaderRole || s.UploaderRole.trim() !== 'Admin'));
-        setItems(rows);
-      }
+      const rows = await adminListStories(email);
+      console.log('Loaded stories:', rows);
+      console.log('Admin uploads:', rows.filter((s: any) => s.UploaderRole && s.UploaderRole.trim() === 'Admin'));
+      console.log('User uploads:', rows.filter((s: any) => !s.UploaderRole || s.UploaderRole.trim() !== 'Admin'));
+      setItems(rows);
     } catch (error) {
       console.error('Error loading stories:', error);
     } finally {
@@ -159,8 +167,22 @@ const AdminStoriesPage: React.FC = () => {
     }
   };
 
+  const loadViolations = async () => {
+    if (!email) return;
+    setLoadingViolations(true);
+    try {
+      const rows = await adminListModerationStories(email);
+      setViolations(rows);
+    } catch (error) {
+      console.error('Error loading moderation stories:', error);
+    } finally {
+      setLoadingViolations(false);
+    }
+  };
+
   useEffect(() => { 
     load(); 
+    loadViolations();
     if (email) {
       fetch('/api/auth/role', {
         headers: { 'x-user-email': email }
@@ -326,7 +348,7 @@ const AdminStoriesPage: React.FC = () => {
       setEditChapters([]);
       setEditCategoryIds([]);
       setStoryTypeForEdit('Text');
-      await load();
+      await refreshAdminData();
       alert('Đã cập nhật truyện thành công!');
     } catch (error) {
       console.error('Error updating story:', error);
@@ -442,7 +464,7 @@ const AdminStoriesPage: React.FC = () => {
       const data = await response.json();
       if (data.success || response.ok) {
         alert(`✅ ${data.message || 'Đã xóa truyện thành công!'}`);
-        await load();
+        await refreshAdminData();
       } else {
         alert(`❌ ${data.error || 'Có lỗi xảy ra'}`);
       }
@@ -598,7 +620,7 @@ const AdminStoriesPage: React.FC = () => {
         setIsFree(true);
         sessionStorage.removeItem(CRAWL_TEMP_KEY);
         
-        await load();
+        await refreshAdminData();
         setTimeout(() => setUploadMessage(''), 5000);
       } else {
         const errorData = await response.json();
@@ -658,6 +680,38 @@ const AdminStoriesPage: React.FC = () => {
 
   const hasUploadPermission = ['Admin', 'Uploader', 'Author', 'Translator', 'Reup'].includes(userRole);
   const isAdminUser = userRole === 'Admin';
+
+  const refreshAdminData = async () => {
+    await Promise.all([load(), loadViolations()]);
+  };
+
+  const warnViolation = async (story: AdminModerationStory) => {
+    const reason = window.prompt('Nhập lý do cảnh báo cho uploader:', story.LastError || 'Vi phạm quy định kiểm duyệt nội dung.');
+    if (!reason) return;
+    try {
+      await adminWarnStory(email, story.SeriesID, reason);
+      await loadViolations();
+      alert('Đã gửi cảnh báo cho uploader.');
+    } catch (error) {
+      console.error('Error warning uploader:', error);
+      alert('Không thể gửi cảnh báo cho uploader.');
+    }
+  };
+
+  const warnAndRemoveViolation = async (story: AdminModerationStory) => {
+    const reason = window.prompt('Nhập lý do gỡ nội dung và cảnh báo uploader:', story.LastError || 'Vi phạm quy định kiểm duyệt nội dung.');
+    if (!reason) return;
+    const confirmed = window.confirm(`Gỡ truyện "${story.Title}" khỏi hệ thống và gửi cảnh báo cho uploader?`);
+    if (!confirmed) return;
+    try {
+      await adminWarnAndRemoveStory(email, story.SeriesID, reason);
+      await refreshAdminData();
+      alert('Đã gửi cảnh báo và loại bỏ nội dung.');
+    } catch (error) {
+      console.error('Error removing violating story:', error);
+      alert('Không thể loại bỏ nội dung vi phạm.');
+    }
+  };
   
   if (!isAdmin) return <div className="p-8">Bạn cần đăng nhập để truy cập trang này.</div>;
   if (!hasUploadPermission) {
@@ -1517,7 +1571,7 @@ const AdminStoriesPage: React.FC = () => {
                                           body: JSON.stringify({ status: 'Approved' }),
                                         });
                                         if (response.ok) {
-                                          await load();
+                                          await refreshAdminData();
                                           alert('Đã duyệt truyện thành công!');
                                         } else {
                                           alert('Có lỗi xảy ra khi duyệt truyện');
@@ -1544,7 +1598,7 @@ const AdminStoriesPage: React.FC = () => {
                                           body: JSON.stringify({ status: 'Rejected' }),
                                         });
                                         if (response.ok) {
-                                          await load();
+                                          await refreshAdminData();
                                           alert('Đã từ chối truyện!');
                                         } else {
                                           alert('Có lỗi xảy ra khi từ chối truyện');
@@ -1571,6 +1625,136 @@ const AdminStoriesPage: React.FC = () => {
             )}
           </div>
         </Card>
+
+        {isAdminUser && (
+          <Card>
+            <div className="p-6">
+              <div className="flex items-center gap-2 mb-4">
+                <AlertCircle className="w-6 h-6 text-red-600" />
+                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+                  Nội dung vi phạm ({violations.length})
+                </h2>
+              </div>
+
+              {loadingViolations ? (
+                <div className="py-10 text-center text-gray-500 dark:text-gray-400">Đang tải danh sách vi phạm...</div>
+              ) : violations.length === 0 ? (
+                <div className="py-10 text-center text-gray-500 dark:text-gray-400">
+                  Chưa có truyện nào bị đánh dấu vi phạm.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-gray-50 dark:bg-gray-800">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">ID</th>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Truyện</th>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Uploader</th>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Moderation</th>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Ghi chú</th>
+                        <th className="px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300">Thao tác</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                      {violations.map((story) => (
+                        <tr key={`violation-${story.SeriesID}`} className="hover:bg-gray-50 dark:hover:bg-gray-800">
+                          <td className="px-4 py-3 text-sm text-gray-900 dark:text-white">{story.SeriesID}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-start gap-3">
+                              <div className="w-12 h-16 rounded-md overflow-hidden bg-gray-200 dark:bg-gray-700 shrink-0">
+                                {story.CoverURL ? (
+                                  <img src={resolveImageSrc(story.CoverURL)} alt={story.Title} className="w-full h-full object-cover" />
+                                ) : null}
+                              </div>
+                              <div>
+                                <div className="font-medium text-gray-900 dark:text-white">{story.Title}</div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400">
+                                  Status: {story.Status || 'Unknown'}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900 dark:text-white">
+                            <div>{story.UploaderName || 'Unknown'}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">{story.UploaderEmail || 'N/A'}</div>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <div className="flex flex-col gap-1">
+                              <span className="px-2 py-1 rounded text-xs bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-200 w-fit">
+                                {story.Decision || 'NONE'}
+                              </span>
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                Job #{story.JobID || '-'} · {story.JobStatus || 'Unknown'}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-600 dark:text-gray-300 max-w-xs">
+                            <div className="space-y-2">
+                              <div>{story.LastError || 'Không có ghi chú moderation.'}</div>
+                              {story.Evidence && story.Evidence.length > 0 && (
+                                <div className="space-y-2">
+                                  {story.Evidence.map((evidence) => {
+                                    const parsed = evidence.ParsedResponse || {};
+                                    const decision = parsed.decision || 'UNKNOWN';
+                                    const reason = parsed.reason || evidence.RawResponse || 'Không có lý do.';
+                                    return (
+                                      <div
+                                        key={`evidence-${story.SeriesID}-${evidence.ResultID}`}
+                                        className="rounded border border-gray-200 dark:border-gray-700 p-2 text-xs bg-gray-50 dark:bg-gray-800/60"
+                                      >
+                                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                                          <span className="font-semibold text-gray-800 dark:text-gray-100">
+                                            {evidence.Category || evidence.EvidenceType || 'EVIDENCE'}
+                                          </span>
+                                          <span className={`px-2 py-0.5 rounded-full ${
+                                            decision === 'BLOCK'
+                                              ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                              : decision === 'REVIEW'
+                                                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                                                : 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+                                          }`}>
+                                            {decision}
+                                          </span>
+                                          {evidence.ConfidenceScore != null && (
+                                            <span className="text-gray-500 dark:text-gray-400">
+                                              Score: {evidence.ConfidenceScore}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="text-gray-700 dark:text-gray-300 break-words">
+                                          {reason}
+                                        </div>
+                                        {evidence.EvidencePath && (
+                                          <div className="mt-1 text-gray-500 dark:text-gray-400 break-all">
+                                            {evidence.EvidencePath}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <div className="flex flex-col gap-2">
+                              <Button size="sm" variant="outline" onClick={() => warnViolation(story)}>
+                                Gửi cảnh báo
+                              </Button>
+                              <Button size="sm" variant="danger" onClick={() => warnAndRemoveViolation(story)}>
+                                Cảnh báo + Gỡ
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
 
         {/* User Uploads */}
         <Card>
@@ -1954,7 +2138,7 @@ const AdminStoriesPage: React.FC = () => {
                                           body: JSON.stringify({ status: 'Approved' }),
                                         });
                                         if (response.ok) {
-                                          await load();
+                                          await refreshAdminData();
                                           alert('Đã duyệt truyện thành công!');
                                         } else {
                                           alert('Có lỗi xảy ra khi duyệt truyện');
@@ -1981,7 +2165,7 @@ const AdminStoriesPage: React.FC = () => {
                                           body: JSON.stringify({ status: 'Rejected' }),
                                         });
                                         if (response.ok) {
-                                          await load();
+                                          await refreshAdminData();
                                           alert('Đã từ chối truyện!');
                                         } else {
                                           alert('Có lỗi xảy ra khi từ chối truyện');
@@ -2015,5 +2199,6 @@ const AdminStoriesPage: React.FC = () => {
 };
 
 export default AdminStoriesPage;
+
 
 

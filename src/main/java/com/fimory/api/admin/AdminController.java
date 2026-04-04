@@ -1,4 +1,4 @@
-﻿package com.fimory.api.admin;
+package com.fimory.api.admin;
 
 import com.fimory.api.category.CategoryDto;
 import com.fimory.api.category.CategoryService;
@@ -10,6 +10,7 @@ import com.fimory.api.common.UnauthorizedException;
 import com.fimory.api.movie.MovieDto;
 import com.fimory.api.movie.MovieService;
 import com.fimory.api.movie.MovieUpsertRequest;
+import com.fimory.api.moderation.ModerationJobService;
 import com.fimory.api.security.AuthenticatedUser;
 import com.fimory.api.security.CurrentUserProvider;
 import com.fimory.api.series.SeriesDto;
@@ -49,6 +50,7 @@ public class AdminController {
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
     private final CrawlStoryService crawlStoryService;
+    private final ModerationJobService moderationJobService;
     private final String uploadDir;
 
     public AdminController(MovieService movieService,
@@ -59,6 +61,7 @@ public class AdminController {
                            JdbcTemplate jdbcTemplate,
                            ObjectMapper objectMapper,
                            CrawlStoryService crawlStoryService,
+                           ModerationJobService moderationJobService,
                            @Value("${app.storage.upload-dir:uploads}") String uploadDir) {
         this.movieService = movieService;
         this.seriesService = seriesService;
@@ -68,6 +71,7 @@ public class AdminController {
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = objectMapper;
         this.crawlStoryService = crawlStoryService;
+        this.moderationJobService = moderationJobService;
         this.uploadDir = uploadDir;
     }
 
@@ -155,7 +159,44 @@ public class AdminController {
     @GetMapping("/stories")
     @PreAuthorize("hasAnyRole('ADMIN','UPLOADER')")
     public ResponseEntity<ApiResponse<List<SeriesDto>>> adminStories() {
-        return ResponseEntity.ok(ApiResponse.ok(seriesService.getStories()));
+        return ResponseEntity.ok(ApiResponse.ok(seriesService.getStoriesForAdmin()));
+    }
+
+    @GetMapping("/moderation/stories")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> moderationStories() {
+        return ResponseEntity.ok(ApiResponse.ok(listModerationStories()));
+    }
+
+    @PostMapping("/moderation/stories/{seriesId}/warn")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> warnStoryViolation(@PathVariable Long seriesId,
+                                                                               @RequestBody(required = false) Map<String, Object> payload) {
+        Map<String, Object> target = getStoryModerationTarget(seriesId);
+        String reason = extractModerationReason(payload);
+        sendModerationWarning(target, reason, false);
+        recordModerationAction("ADMIN_MODERATION_WARN", seriesId, target, reason);
+        return ResponseEntity.ok(ApiResponse.ok(Map.of(
+                "seriesId", seriesId,
+                "warned", true,
+                "removed", false
+        )));
+    }
+
+    @PostMapping("/moderation/stories/{seriesId}/warn-remove")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> warnAndRemoveStoryViolation(@PathVariable Long seriesId,
+                                                                                         @RequestBody(required = false) Map<String, Object> payload) {
+        Map<String, Object> target = getStoryModerationTarget(seriesId);
+        String reason = extractModerationReason(payload);
+        sendModerationWarning(target, reason, true);
+        recordModerationAction("ADMIN_MODERATION_REMOVE", seriesId, target, reason);
+        seriesService.deleteStory(seriesId);
+        return ResponseEntity.ok(ApiResponse.ok(Map.of(
+                "seriesId", seriesId,
+                "warned", true,
+                "removed", true
+        )));
     }
 
     @PostMapping("/stories")
@@ -218,6 +259,7 @@ public class AdminController {
                 crawledImages,
                 chapters
         );
+        enqueueStoryModeration(created.id(), true);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("SeriesID", created.id());
@@ -246,7 +288,7 @@ public class AdminController {
                                                                   @RequestParam(required = false) String slug,
                                                                   @RequestParam(required = false) List<Long> categoryIds,
                                                                   @RequestPart(required = false) MultipartFile coverImage) {
-        SeriesDto current = seriesService.getStories().stream()
+        SeriesDto current = seriesService.getStoriesForAdmin().stream()
                 .filter(s -> s.id().equals(seriesId))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Story not found"));
@@ -353,9 +395,9 @@ public class AdminController {
         String actor = Objects.requireNonNullElse(currentUserProvider.requireUser().email(), "Admin");
         String type = isUpgrade(normalizedOld, normalizedNew) ? "RoleUpgrade" : "RoleDowngrade";
         String title = isUpgrade(normalizedOld, normalizedNew)
-                ? "TÃ i khoáº£n Ä‘Æ°á»£c nÃ¢ng cáº¥p quyá»n"
-                : "TÃ i khoáº£n bá»‹ thay Ä‘á»•i quyá»n";
-        String content = "Quyá»n cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c Ä‘á»•i tá»« " + normalizedOld + " sang " + normalizedNew + " bá»Ÿi " + actor + ".";
+                ? "Tài khoản được nâng cấp quyền"
+                : "Tài khoản bị thay đổi quyền";
+        String content = "Quyền của bạn đã được đổi từ " + normalizedOld + " sang " + normalizedNew + " bởi " + actor + ".";
 
         notifyUser(userId, type, title, content, "/settings");
 
@@ -1095,8 +1137,8 @@ public class AdminController {
                 notifyUser(
                         uploaderId,
                         "UploadApproved",
-                        "Phim cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c duyá»‡t",
-                        "Phim \"" + title + "\" Ä‘Ã£ Ä‘Æ°á»£c " + actor + " duyá»‡t.",
+                        "Phim của bạn đã được duyệt",
+                        "Phim \"" + title + "\" đã được " + actor + " duyệt.",
                         relatedUrl
                 );
             }
@@ -1105,8 +1147,8 @@ public class AdminController {
                 notifyUser(
                         uploaderId,
                         "UploadRejected",
-                        "Phim cá»§a báº¡n bá»‹ tá»« chá»‘i",
-                        "Phim \"" + title + "\" Ä‘Ã£ bá»‹ " + actor + " tá»« chá»‘i.",
+                        "Phim của bạn bị từ chối",
+                        "Phim \"" + title + "\" đã bị " + actor + " từ chối.",
                         "/user/upload"
                 );
             }
@@ -1143,7 +1185,7 @@ public class AdminController {
         );
         String title = jdbcTemplate.query(
                 "SELECT TOP 1 Title FROM Series WHERE SeriesID = ?",
-                rs -> rs.next() ? rs.getString(1) : "truyá»‡n",
+                rs -> rs.next() ? rs.getString(1) : "truyện",
                 seriesId
         );
         String slug = jdbcTemplate.query(
@@ -1159,8 +1201,8 @@ public class AdminController {
                 notifyUser(
                         uploaderId,
                         "UploadApproved",
-                        "Truyá»‡n cá»§a báº¡n Ä‘Ã£ Ä‘Æ°á»£c duyá»‡t",
-                        "Truyá»‡n \"" + title + "\" Ä‘Ã£ Ä‘Æ°á»£c " + actor + " duyá»‡t.",
+                        "Truyện của bạn đã được duyệt",
+                        "Truyện \"" + title + "\" đã được " + actor + " duyệt.",
                         relatedUrl
                 );
             }
@@ -1169,8 +1211,8 @@ public class AdminController {
                 notifyUser(
                         uploaderId,
                         "UploadRejected",
-                        "Truyá»‡n cá»§a báº¡n bá»‹ tá»« chá»‘i",
-                        "Truyá»‡n \"" + title + "\" Ä‘Ã£ bá»‹ " + actor + " tá»« chá»‘i.",
+                        "Truyện của bạn bị từ chối",
+                        "Truyện \"" + title + "\" đã bị " + actor + " từ chối.",
                         "/upload/stories"
                 );
             }
@@ -1404,12 +1446,12 @@ public class AdminController {
 
         if (isComic && imagePaths.isEmpty()) {
             return ResponseEntity.badRequest().body(
-                    new ApiResponse<>(false, Map.of("error", "Truyá»‡n tranh cáº§n Ã­t nháº¥t má»™t áº£nh chÆ°Æ¡ng"), Map.of())
+                    new ApiResponse<>(false, Map.of("error", "Truyện tranh cần ít nhất một ảnh chương"), Map.of())
             );
         }
         if (!isComic && (contentFile == null || contentFile.isEmpty())) {
             return ResponseEntity.badRequest().body(
-                    new ApiResponse<>(false, Map.of("error", "Truyá»‡n chá»¯ cáº§n file ná»™i dung chÆ°Æ¡ng"), Map.of())
+                    new ApiResponse<>(false, Map.of("error", "Truyện chữ cần file nội dung chương"), Map.of())
             );
         }
 
@@ -1421,6 +1463,7 @@ public class AdminController {
         if (chapterId != null && columnExists("Chapters", "ImageCount")) {
             jdbcTemplate.update("UPDATE Chapters SET ImageCount = ? WHERE ChapterID = ?", imageCount, chapterId);
         }
+        enqueueStoryModeration(seriesId, chapterId != null);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("seriesId", seriesId);
@@ -1465,7 +1508,7 @@ public class AdminController {
 
         if (savedImages.isEmpty()) {
             return ResponseEntity.badRequest().body(
-                    new ApiResponse<>(false, Map.of("error", "Crawl áº£nh tháº¥t báº¡i hoáº·c khÃ´ng cÃ³ áº£nh há»£p lá»‡"), Map.of())
+                    new ApiResponse<>(false, Map.of("error", "Crawl ảnh thất bại hoặc không có ảnh hợp lệ"), Map.of())
             );
         }
 
@@ -1487,6 +1530,7 @@ public class AdminController {
         if (chapterId != null && columnExists("Chapters", "ImageCount")) {
             jdbcTemplate.update("UPDATE Chapters SET ImageCount = ? WHERE ChapterID = ?", savedImages.size(), chapterId);
         }
+        enqueueStoryModeration(seriesId, chapterId != null);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("seriesId", seriesId);
@@ -1636,7 +1680,7 @@ public class AdminController {
                 rs -> rs.next() ? rs.getString(1) : "phim",
                 movieId
         );
-        String ep = (episodeTitle == null || episodeTitle.isBlank()) ? "táº­p má»›i" : episodeTitle.trim();
+        String ep = (episodeTitle == null || episodeTitle.isBlank()) ? "tập mới" : episodeTitle.trim();
         String relatedUrl = slug == null || slug.isBlank() ? "/movies" : "/watch/" + slug;
         jdbcTemplate.update(
                 """
@@ -1647,8 +1691,8 @@ public class AdminController {
                 WHERE mf.MovieID = ? AND u.IsActive = 1
                 """,
                 "FavoriteUpdate",
-                "Phim báº¡n yÃªu thÃ­ch cÃ³ táº­p má»›i",
-                "Phim \"" + movieTitle + "\" vá»«a ra " + ep + ".",
+                "Phim bạn yêu thích có tập mới",
+                "Phim \"" + movieTitle + "\" vừa ra " + ep + ".",
                 relatedUrl,
                 movieId
         );
@@ -1662,7 +1706,7 @@ public class AdminController {
         );
         String storyTitle = jdbcTemplate.query(
                 "SELECT TOP 1 Title FROM Series WHERE SeriesID = ?",
-                rs -> rs.next() ? rs.getString(1) : "truyá»‡n",
+                rs -> rs.next() ? rs.getString(1) : "truyện",
                 seriesId
         );
         String chap = (chapterTitle == null || chapterTitle.isBlank()) ? ("Chapter " + chapterNumber) : chapterTitle.trim();
@@ -1678,8 +1722,8 @@ public class AdminController {
                 WHERE sf.SeriesID = ? AND u.IsActive = 1
                 """,
                 "FavoriteUpdate",
-                "Truyá»‡n báº¡n yÃªu thÃ­ch cÃ³ chÆ°Æ¡ng má»›i",
-                "Truyá»‡n \"" + storyTitle + "\" vá»«a ra " + chap + ".",
+                "Truyện bạn yêu thích có chương mới",
+                "Truyện \"" + storyTitle + "\" vừa ra " + chap + ".",
                 relatedUrl,
                 seriesId
         );
@@ -1696,6 +1740,202 @@ public class AdminController {
                 """,
                 userId, type, title, content, relatedUrl
         );
+    }
+
+    private void enqueueStoryModeration(Long seriesId, boolean shouldEnqueue) {
+        if (!shouldEnqueue || seriesId == null || !tableExists("ContentModerationJobs")) {
+            return;
+        }
+        moderationJobService.createJob(seriesId, "Series", 10);
+    }
+
+    private List<Map<String, Object>> listModerationStories() {
+        if (!tableExists("ContentModerationJobs")) {
+            return List.of();
+        }
+        return jdbcTemplate.query(
+                """
+                SELECT s.SeriesID,
+                       s.Title,
+                       s.Slug,
+                       s.CoverURL,
+                       s.Status,
+                       s.UploaderID,
+                       u.Username AS UploaderName,
+                       u.Email AS UploaderEmail,
+                       j.JobID,
+                       j.Status AS JobStatus,
+                       j.Decision,
+                       j.LastError,
+                       j.CreatedAt AS JobCreatedAt,
+                       j.UpdatedAt AS JobUpdatedAt
+                FROM Series s
+                LEFT JOIN Users u ON u.UserID = s.UploaderID
+                OUTER APPLY (
+                    SELECT TOP 1 JobID, Status, Decision, LastError, CreatedAt, UpdatedAt
+                    FROM ContentModerationJobs
+                    WHERE ContentType = 'Series' AND ContentID = s.SeriesID
+                    ORDER BY CreatedAt DESC, JobID DESC
+                ) j
+                WHERE (s.Status = 'Rejected' AND COALESCE(j.Decision, 'NONE') <> 'ALLOW')
+                   OR COALESCE(j.Decision, 'NONE') IN ('BLOCK', 'REVIEW')
+                ORDER BY COALESCE(j.UpdatedAt, j.CreatedAt, s.UpdatedAt, s.CreatedAt) DESC, s.SeriesID DESC
+                """,
+                (rs, rowNum) -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("SeriesID", rs.getLong("SeriesID"));
+                    item.put("Title", rs.getString("Title"));
+                    item.put("Slug", rs.getString("Slug"));
+                    item.put("CoverURL", rs.getString("CoverURL"));
+                    item.put("Status", rs.getString("Status"));
+                    item.put("UploaderID", rs.getObject("UploaderID") != null ? rs.getLong("UploaderID") : null);
+                    item.put("UploaderName", rs.getString("UploaderName"));
+                    item.put("UploaderEmail", rs.getString("UploaderEmail"));
+                    item.put("JobID", rs.getObject("JobID") != null ? rs.getLong("JobID") : null);
+                    item.put("JobStatus", rs.getString("JobStatus"));
+                    item.put("Decision", rs.getString("Decision"));
+                    item.put("LastError", rs.getString("LastError"));
+                    item.put("JobCreatedAt", rs.getObject("JobCreatedAt") != null ? String.valueOf(rs.getObject("JobCreatedAt")) : null);
+                    item.put("JobUpdatedAt", rs.getObject("JobUpdatedAt") != null ? String.valueOf(rs.getObject("JobUpdatedAt")) : null);
+                    Long jobId = rs.getObject("JobID") != null ? rs.getLong("JobID") : null;
+                    item.put("Evidence", jobId == null ? List.of() : listModerationEvidence(jobId));
+                    return item;
+                }
+        );
+    }
+
+    private List<Map<String, Object>> listModerationEvidence(Long jobId) {
+        if (jobId == null || !tableExists("ContentModerationResults")) {
+            return List.of();
+        }
+        return jdbcTemplate.query(
+                """
+                SELECT ResultID, Category, ConfidenceScore, EvidenceType, EvidencePath, RawResponse, CreatedAt
+                FROM ContentModerationResults
+                WHERE JobID = ?
+                ORDER BY ResultID ASC
+                """,
+                (rs, rowNum) -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("ResultID", rs.getLong("ResultID"));
+                    item.put("Category", rs.getString("Category"));
+                    item.put("ConfidenceScore", rs.getBigDecimal("ConfidenceScore"));
+                    item.put("EvidenceType", rs.getString("EvidenceType"));
+                    item.put("EvidencePath", rs.getString("EvidencePath"));
+                    item.put("CreatedAt", rs.getObject("CreatedAt") != null ? String.valueOf(rs.getObject("CreatedAt")) : null);
+                    String rawResponse = rs.getString("RawResponse");
+                    item.put("RawResponse", rawResponse);
+                    item.put("ParsedResponse", parseModerationRawResponse(rawResponse));
+                    return item;
+                },
+                jobId
+        );
+    }
+
+    private Map<String, Object> parseModerationRawResponse(String rawResponse) {
+        if (rawResponse == null || rawResponse.isBlank()) {
+            return Map.of();
+        }
+        try {
+            JsonNode json = objectMapper.readTree(rawResponse);
+            Map<String, Object> result = new LinkedHashMap<>();
+            json.fields().forEachRemaining(entry -> result.put(entry.getKey(), entry.getValue().isValueNode() ? entry.getValue().asText() : entry.getValue().toString()));
+            return result;
+        } catch (Exception ignored) {
+            return Map.of("raw", rawResponse);
+        }
+    }
+
+    private Map<String, Object> getStoryModerationTarget(Long seriesId) {
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+                """
+                SELECT TOP 1 s.SeriesID, s.Title, s.Slug, s.Status, s.UploaderID,
+                       u.Username AS UploaderName, u.Email AS UploaderEmail
+                FROM Series s
+                LEFT JOIN Users u ON u.UserID = s.UploaderID
+                WHERE s.SeriesID = ?
+                """,
+                (rs, rowNum) -> {
+                    Map<String, Object> item = new LinkedHashMap<>();
+                    item.put("SeriesID", rs.getLong("SeriesID"));
+                    item.put("Title", rs.getString("Title"));
+                    item.put("Slug", rs.getString("Slug"));
+                    item.put("Status", rs.getString("Status"));
+                    item.put("UploaderID", rs.getObject("UploaderID") != null ? rs.getLong("UploaderID") : null);
+                    item.put("UploaderName", rs.getString("UploaderName"));
+                    item.put("UploaderEmail", rs.getString("UploaderEmail"));
+                    return item;
+                },
+                seriesId
+        );
+        if (rows.isEmpty()) {
+            throw new NotFoundException("Story not found");
+        }
+        return rows.getFirst();
+    }
+
+    private String extractModerationReason(Map<String, Object> payload) {
+        if (payload == null || payload.get("reason") == null) {
+            return "Vi phạm quy định kiểm duyệt nội dung của hệ thống.";
+        }
+        String reason = String.valueOf(payload.get("reason")).trim();
+        return reason.isBlank() ? "Vi phạm quy định kiểm duyệt nội dung của hệ thống." : reason;
+    }
+
+    private void sendModerationWarning(Map<String, Object> target, String reason, boolean removingContent) {
+        Long uploaderId = target.get("UploaderID") instanceof Number number ? number.longValue() : null;
+        if (uploaderId == null) {
+            return;
+        }
+        String title = Objects.toString(target.get("Title"), "Nội dung");
+        String content = removingContent
+                ? "Nội dung \"" + title + "\" đã bị gỡ khỏi hệ thống. Lý do: " + reason
+                : "Nội dung \"" + title + "\" đang bị cảnh báo vi phạm. Vui lòng kiểm tra và chỉnh sửa. Lý do: " + reason;
+        notifyUser(
+                uploaderId,
+                removingContent ? "UploadRejected" : "ModerationWarning",
+                removingContent ? "Nội dung đã bị gỡ" : "Cảnh báo vi phạm nội dung",
+                content,
+                "/upload/stories"
+        );
+    }
+
+    private void recordModerationAction(String action, Long seriesId, Map<String, Object> target, String reason) {
+        if (!tableExists("ActivityLogs")) {
+            return;
+        }
+        AuthenticatedUser actor = currentUserProvider.requireUser();
+        String oldValue = safeJson(Map.of(
+                "title", Objects.toString(target.get("Title"), ""),
+                "status", Objects.toString(target.get("Status"), ""),
+                "uploaderEmail", Objects.toString(target.get("UploaderEmail"), "")
+        ));
+        String newValue = safeJson(Map.of(
+                "reason", reason,
+                "action", action
+        ));
+        jdbcTemplate.update(
+                """
+                INSERT INTO ActivityLogs (UserID, Action, TableName, RecordID, OldValue, NewValue, IPAddress, UserAgent, CreatedAt)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, GETDATE())
+                """,
+                actor.userId(),
+                action,
+                "Series",
+                seriesId,
+                oldValue,
+                newValue,
+                null,
+                "AdminModerationUI"
+        );
+    }
+
+    private String safeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception ignored) {
+            return String.valueOf(value);
+        }
     }
 
     private String normalizeRoleName(String raw) {
@@ -1858,5 +2098,4 @@ public class AdminController {
         return count != null && count > 0;
     }
 }
-
 

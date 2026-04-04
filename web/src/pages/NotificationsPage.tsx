@@ -17,6 +17,8 @@ const typeLabel: Record<string, string> = {
   ContentDeleted: 'Phim đã bị xóa',
   UploadApproved: 'Upload được duyệt',
   UploadRejected: 'Upload bị từ chối',
+  ModerationWarning: 'Cảnh báo kiểm duyệt',
+  ModerationFlagged: 'AI gắn cờ kiểm duyệt',
   RoleUpgrade: 'Tài khoản nâng cấp quyền',
   RoleDowngrade: 'Tài khoản bị giảm cấp',
   RoleUpgradeRequest: 'Yêu cầu nâng cấp tài khoản',
