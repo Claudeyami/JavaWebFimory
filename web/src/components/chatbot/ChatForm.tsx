@@ -22,7 +22,7 @@ const ChatForm: React.FC<ChatFormProps> = ({ chatHistory, setChatHistory, genera
     // Thêm tin nhắn của user
     setChatHistory((history) => [...history, { role: 'user', text: userMessage }]);
 
-    // Hiển thị "Thinking..." và gọi API
+// Hien thi goi API
     setTimeout(() => {
       setChatHistory((history) => [...history, { role: 'model', text: 'Thinking...' }]);
       generateBotResponse([...chatHistory, { role: 'user', text: userMessage }]);
