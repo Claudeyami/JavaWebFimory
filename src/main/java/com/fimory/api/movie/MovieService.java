@@ -337,7 +337,7 @@ public class MovieService {
     }
 
     private void apply(MovieEntity entity, MovieUpsertRequest request, Long uploaderId) {
-        entity.setSlug(request.slug());
+        entity.setSlug(ensureUniqueSlug(request.slug(), entity.getId()));
         entity.setTitle(request.title());
         entity.setDescription(request.description());
         entity.setCoverUrl(request.coverUrl());
@@ -352,6 +352,28 @@ public class MovieService {
         }
         if (entity.getIsFree() == null) {
             entity.setIsFree(Boolean.FALSE);
+        }
+    }
+
+    private String ensureUniqueSlug(String requestedSlug, Long currentMovieId) {
+        if (requestedSlug == null || requestedSlug.isBlank()) {
+            throw new IllegalArgumentException("Slug is required");
+        }
+
+        String baseSlug = requestedSlug.trim();
+        String candidate = baseSlug;
+        int suffix = 2;
+
+        while (true) {
+            var existing = movieRepository.findBySlug(candidate);
+            if (existing.isEmpty()) {
+                return candidate;
+            }
+            if (currentMovieId != null && currentMovieId.equals(existing.get().getId())) {
+                return candidate;
+            }
+            candidate = baseSlug + "-" + suffix;
+            suffix++;
         }
     }
 

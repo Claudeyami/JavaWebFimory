@@ -188,6 +188,109 @@ public class HistoryController {
         return ResponseEntity.ok(ApiResponse.ok(Map.of("saved", true, "seriesId", seriesId, "chapterId", chapterId)));
     }
 
+    @GetMapping("/series/progress")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getSeriesProgress(@RequestParam(required = false) String email,
+                                                                               @RequestParam(required = false) Long chapterId,
+                                                                               @RequestHeader(value = "x-user-email", required = false) String emailHeader) {
+        Long userId = resolveUserId(null, email, emailHeader);
+        if (userId == null || chapterId == null || !tableExists("WatchProgress") || !columnExists("WatchProgress", "CurrentPosition")) {
+            return ResponseEntity.ok(ApiResponse.ok(Map.of(
+                    "currentPosition", 1,
+                    "isCompleted", false
+            )));
+        }
+
+        boolean hasCompleted = columnExists("WatchProgress", "IsCompleted");
+        boolean hasLastWatchedAt = columnExists("WatchProgress", "LastWatchedAt");
+        List<Map<String, Object>> rows = jdbcTemplate.query(
+                "SELECT TOP 1 CurrentPosition, IsCompleted, LastWatchedAt FROM WatchProgress WHERE UserID = ? AND ContentType = 'Chapter' AND ContentID = ?",
+                (rs, rowNum) -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("currentPosition", rs.getObject("CurrentPosition") == null ? 1 : rs.getInt("CurrentPosition"));
+                    row.put("isCompleted", hasCompleted && rs.getObject("IsCompleted") != null && rs.getBoolean("IsCompleted"));
+                    row.put("lastWatchedAt", hasLastWatchedAt ? rs.getObject("LastWatchedAt") : null);
+                    return row;
+                },
+                userId,
+                chapterId
+        );
+
+        if (rows.isEmpty()) {
+            return ResponseEntity.ok(ApiResponse.ok(Map.of(
+                    "currentPosition", 1,
+                    "isCompleted", false
+            )));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(rows.getFirst()));
+    }
+
+    @PostMapping("/series/progress")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> saveSeriesProgress(@RequestBody(required = false) Map<String, Object> payload,
+                                                                                @RequestParam(required = false) String email,
+                                                                                @RequestHeader(value = "x-user-email", required = false) String emailHeader) {
+        Long userId = resolveUserId(payload, email, emailHeader);
+        if (userId == null) {
+            return ResponseEntity.ok(ApiResponse.ok(Map.of("saved", false, "message", "Missing user context")));
+        }
+        Long chapterId = asLong(payload == null ? null : payload.get("chapterId"));
+        Long seriesId = asLong(payload == null ? null : payload.get("seriesId"));
+        int currentPosition = Math.max(1, asInt(payload == null ? null : payload.get("currentPosition"), 1));
+        boolean isCompleted = asBoolean(payload == null ? null : payload.get("isCompleted"));
+        if (chapterId == null || !tableExists("WatchProgress")) {
+            return ResponseEntity.badRequest().body(new ApiResponse<>(false, Map.of("message", "chapterId is required"), Map.of()));
+        }
+
+        int updated = jdbcTemplate.update(
+                "UPDATE WatchProgress SET CurrentPosition = ?, IsCompleted = ?, LastWatchedAt = GETDATE() WHERE UserID = ? AND ContentType = 'Chapter' AND ContentID = ?",
+                currentPosition,
+                isCompleted,
+                userId,
+                chapterId
+        );
+        if (updated == 0) {
+            jdbcTemplate.update(
+                    "INSERT INTO WatchProgress (UserID, ContentType, ContentID, CurrentPosition, TotalDuration, IsCompleted, LastWatchedAt) VALUES (?, 'Chapter', ?, ?, NULL, ?, GETDATE())",
+                    userId,
+                    chapterId,
+                    currentPosition,
+                    isCompleted
+            );
+        }
+
+        if (seriesId != null) {
+            int historyUpdated = jdbcTemplate.update(
+                    """
+                    UPDATE SeriesHistory
+                    SET ChapterID = ?, ReadAt = GETDATE()
+                    WHERE HistoryID = (
+                        SELECT TOP 1 HistoryID
+                        FROM SeriesHistory
+                        WHERE UserID = ? AND SeriesID = ?
+                        ORDER BY ReadAt DESC, HistoryID DESC
+                    )
+                    """,
+                    chapterId,
+                    userId,
+                    seriesId
+            );
+            if (historyUpdated == 0) {
+                jdbcTemplate.update(
+                        "INSERT INTO SeriesHistory (UserID, SeriesID, ChapterID, ReadAt) VALUES (?, ?, ?, GETDATE())",
+                        userId,
+                        seriesId,
+                        chapterId
+                );
+            }
+        }
+
+        return ResponseEntity.ok(ApiResponse.ok(Map.of(
+                "saved", true,
+                "chapterId", chapterId,
+                "currentPosition", currentPosition,
+                "isCompleted", isCompleted
+        )));
+    }
+
     @GetMapping("/series")
     public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getSeriesHistory(@RequestParam(required = false) String email,
                                                                                     @RequestHeader(value = "x-user-email", required = false) String emailHeader) {
@@ -295,11 +398,59 @@ public class HistoryController {
         }
     }
 
+    private int asInt(Object value, int defaultValue) {
+        if (value == null) {
+            return defaultValue;
+        }
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        String raw = String.valueOf(value).trim();
+        if (raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(raw);
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    private boolean asBoolean(Object value) {
+        if (value == null) {
+            return false;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        String raw = String.valueOf(value).trim().toLowerCase();
+        return "1".equals(raw) || "true".equals(raw) || "yes".equals(raw) || "on".equals(raw);
+    }
+
     private String normalize(String value) {
         if (value == null) {
             return null;
         }
         String normalized = value.trim();
         return normalized.isBlank() ? null : normalized;
+    }
+
+    private boolean tableExists(String tableName) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = ?",
+                Integer.class,
+                tableName
+        );
+        return count != null && count > 0;
+    }
+
+    private boolean columnExists(String tableName, String columnName) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = ? AND COLUMN_NAME = ?",
+                Integer.class,
+                tableName,
+                columnName
+        );
+        return count != null && count > 0;
     }
 }

@@ -28,6 +28,7 @@ import UserUploadPage from './pages/UserUploadPage';
 import { MoviesPage } from './pages/MoviesPage';
 import StoriesPage from './pages/StoriesPage';
 import StoryPage from './pages/StoryPage';
+import ReaderPage from './pages/Reader/ReaderPage';
 import CategoriesPage from './pages/CategoriesPage';
 import CategoryDetailPage from './pages/CategoryDetailPage';
 
@@ -70,6 +71,7 @@ function App() {
                         <Route path="/movies" element={<MoviesPage />} />
                         <Route path="/stories" element={<StoriesPage />} />
                         <Route path="/stories/:slug" element={<StoryPage />} />
+                        <Route path="/stories/:slug/read" element={<ReaderPage />} />
                         <Route path="/categories" element={<CategoriesPage />} />
                         <Route path="/categories/:slug" element={<CategoryDetailPage />} />
                         {/* Admin */}

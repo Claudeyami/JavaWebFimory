@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -138,6 +139,25 @@ public class UserService {
         return new UserPreferenceDto(language, theme, autoPlay);
     }
 
+    public Map<String, String> getPreferenceMap(Long userId) {
+        String tableName = resolvePreferenceTable();
+        if (tableName == null) {
+            return Map.of();
+        }
+
+        List<String> columns = getPreferenceColumns(tableName);
+        if (isKeyValuePreferenceTable(columns)) {
+            return new LinkedHashMap<>(loadKeyValuePreferences(tableName, userId));
+        }
+
+        UserPreferenceDto dto = getPreferences(userId);
+        Map<String, String> values = new LinkedHashMap<>();
+        values.put("language", dto.language() == null ? "vi" : dto.language());
+        values.put("theme", dto.theme() == null ? "light" : dto.theme());
+        values.put("auto_play", String.valueOf(dto.autoPlay() != null && dto.autoPlay()));
+        return values;
+    }
+
     @Transactional
     public UserPreferenceDto updatePreferences(Long userId, UpdatePreferenceRequest request) {
         String tableName = resolvePreferenceTable();
@@ -235,6 +255,13 @@ public class UserService {
         return userRepository.findByEmailIgnoreCase(email)
                 .map(UserEntity::getId)
                 .orElseThrow(() -> new NotFoundException("User not found"));
+    }
+
+    public void savePreference(Long userId, String key, String value) {
+        if (key == null || key.isBlank()) {
+            return;
+        }
+        upsertSimplePreference(userId, key.trim(), value == null ? "" : value.trim());
     }
 
     private String normalizeRole(String rawRole) {

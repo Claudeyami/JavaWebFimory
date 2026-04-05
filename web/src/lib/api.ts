@@ -85,7 +85,8 @@ export async function getUserPreferences(
   url.searchParams.set("email", email);
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error("Failed to load preferences");
-  return res.json();
+  const payload = await res.json();
+  return (payload?.data ?? payload ?? {}) as Record<string, string>;
 }
 
 export async function saveUserPreference(
@@ -99,6 +100,107 @@ export async function saveUserPreference(
     body: JSON.stringify({ email, key, value }),
   });
   if (!res.ok) throw new Error("Failed to save preference");
+}
+
+export type ReaderManifestChapter = {
+  ChapterID: number;
+  ChapterNumber: number;
+  Title?: string;
+  IsFree?: boolean | null;
+  CreatedAt?: string | null;
+  ImageCount?: number | null;
+};
+
+export type ReaderManifestResponse = {
+  story: {
+    SeriesID: number;
+    Title: string;
+    Slug: string;
+    StoryType?: "Text" | "Comic";
+    CoverURL?: string;
+  };
+  chapters: ReaderManifestChapter[];
+};
+
+export type ReaderChapterImage = {
+  ImageID: number;
+  ImageURL: string;
+  ImageOrder: number;
+  Width?: number | null;
+  Height?: number | null;
+};
+
+export type ReaderChapterDetail = {
+  SeriesID: number;
+  SeriesSlug: string;
+  SeriesTitle: string;
+  StoryType?: "Text" | "Comic";
+  ChapterID: number;
+  ChapterNumber: number;
+  Title?: string;
+  Content?: string | null;
+  IsFree?: boolean | null;
+  CreatedAt?: string | null;
+  ViewCount?: number | null;
+  ImageCount?: number | null;
+  Images: ReaderChapterImage[];
+  PrevChapterNumber?: number | null;
+  NextChapterNumber?: number | null;
+};
+
+export type ReaderProgress = {
+  currentPosition: number;
+  isCompleted?: boolean;
+  lastWatchedAt?: string | null;
+};
+
+export async function fetchReaderManifest(slug: string): Promise<ReaderManifestResponse> {
+  const res = await fetch(`${API_BASE}/reader/stories/${encodeURIComponent(slug)}/manifest`);
+  if (!res.ok) throw new Error("Failed to fetch reader manifest");
+  const payload = await res.json();
+  return (payload?.data ?? payload) as ReaderManifestResponse;
+}
+
+export async function fetchReaderChapterDetail(slug: string, chapterNumber: number): Promise<ReaderChapterDetail> {
+  const res = await fetch(`${API_BASE}/reader/stories/${encodeURIComponent(slug)}/chapters/${chapterNumber}`);
+  if (!res.ok) throw new Error("Failed to fetch reader chapter");
+  const payload = await res.json();
+  return (payload?.data ?? payload) as ReaderChapterDetail;
+}
+
+export async function fetchSeriesReaderProgress(
+  email: string,
+  chapterId: number
+): Promise<ReaderProgress> {
+  const url = new URL(`${API_BASE}/history/series/progress`, window.location.origin);
+  url.searchParams.set("email", email);
+  url.searchParams.set("chapterId", String(chapterId));
+  const res = await fetch(url.toString(), {
+    headers: { "x-user-email": email },
+  });
+  if (!res.ok) throw new Error("Failed to fetch reader progress");
+  const payload = await res.json();
+  return (payload?.data ?? payload ?? { currentPosition: 1, isCompleted: false }) as ReaderProgress;
+}
+
+export async function saveSeriesReaderProgress(input: {
+  email?: string;
+  seriesId: number;
+  chapterId: number;
+  currentPosition: number;
+  isCompleted?: boolean;
+}): Promise<ReaderProgress> {
+  const res = await fetch(`${API_BASE}/history/series/progress`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(input.email ? { "x-user-email": input.email } : {}),
+    },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error("Failed to save reader progress");
+  const payload = await res.json();
+  return (payload?.data ?? payload) as ReaderProgress;
 }
 
 export interface UserProfileDto {

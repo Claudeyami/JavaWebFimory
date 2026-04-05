@@ -28,6 +28,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
@@ -1349,22 +1351,39 @@ public class AdminController {
             return;
         }
         boolean hasCreatedAt = columnExists("ChapterImages", "CreatedAt");
+        boolean hasWidth = columnExists("ChapterImages", "Width");
+        boolean hasHeight = columnExists("ChapterImages", "Height");
         int order = 1;
         for (String raw : imagePaths) {
             String imagePath = normalizeIncomingPath(raw);
             if (imagePath == null || imagePath.isBlank()) {
                 continue;
             }
+            ImageMeta meta = readImageMeta(imagePath);
             if (hasCreatedAt) {
-                jdbcTemplate.update(
-                        "INSERT INTO ChapterImages (ChapterID, ImageURL, ImageOrder, CreatedAt) VALUES (?, ?, ?, GETDATE())",
-                        chapterId, imagePath, order++
-                );
+                if (hasWidth && hasHeight) {
+                    jdbcTemplate.update(
+                            "INSERT INTO ChapterImages (ChapterID, ImageURL, ImageOrder, Width, Height, CreatedAt) VALUES (?, ?, ?, ?, ?, GETDATE())",
+                            chapterId, imagePath, order++, meta.width(), meta.height()
+                    );
+                } else {
+                    jdbcTemplate.update(
+                            "INSERT INTO ChapterImages (ChapterID, ImageURL, ImageOrder, CreatedAt) VALUES (?, ?, ?, GETDATE())",
+                            chapterId, imagePath, order++
+                    );
+                }
             } else {
-                jdbcTemplate.update(
-                        "INSERT INTO ChapterImages (ChapterID, ImageURL, ImageOrder) VALUES (?, ?, ?)",
-                        chapterId, imagePath, order++
-                );
+                if (hasWidth && hasHeight) {
+                    jdbcTemplate.update(
+                            "INSERT INTO ChapterImages (ChapterID, ImageURL, ImageOrder, Width, Height) VALUES (?, ?, ?, ?, ?)",
+                            chapterId, imagePath, order++, meta.width(), meta.height()
+                    );
+                } else {
+                    jdbcTemplate.update(
+                            "INSERT INTO ChapterImages (ChapterID, ImageURL, ImageOrder) VALUES (?, ?, ?)",
+                            chapterId, imagePath, order++
+                    );
+                }
             }
         }
     }
@@ -2038,6 +2057,42 @@ public class AdminController {
         } catch (Exception ex) {
             throw new IllegalStateException("Failed to store file: " + ex.getMessage(), ex);
         }
+    }
+
+    private ImageMeta readImageMeta(String storagePath) {
+        try {
+            Path filePath = resolveStoragePath(storagePath);
+            if (filePath == null || !Files.exists(filePath)) {
+                return new ImageMeta(null, null);
+            }
+            BufferedImage image = ImageIO.read(filePath.toFile());
+            if (image == null) {
+                return new ImageMeta(null, null);
+            }
+            return new ImageMeta(image.getWidth(), image.getHeight());
+        } catch (Exception ignored) {
+            return new ImageMeta(null, null);
+        }
+    }
+
+    private Path resolveStoragePath(String storagePath) {
+        if (storagePath == null || storagePath.isBlank()) {
+            return null;
+        }
+        String normalized = storagePath.trim().replace("\\", "/");
+        if (normalized.startsWith("/storage/")) {
+            normalized = normalized.substring("/storage/".length());
+        } else if (normalized.startsWith("storage/")) {
+            normalized = normalized.substring("storage/".length());
+        } else if (normalized.startsWith("/uploads/")) {
+            normalized = normalized.substring("/uploads/".length());
+        } else if (normalized.startsWith("uploads/")) {
+            normalized = normalized.substring("uploads/".length());
+        }
+        return Path.of(uploadDir).toAbsolutePath().normalize().resolve(normalized).normalize();
+    }
+
+    private record ImageMeta(Integer width, Integer height) {
     }
 
     private void requireSeriesOwnerOrAdmin(Long seriesId, AuthenticatedUser user) {

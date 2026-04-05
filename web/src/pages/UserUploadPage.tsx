@@ -977,8 +977,19 @@ const UserUploadPage: React.FC = () => {
         // Clear success message after 5 seconds
         setTimeout(() => setUploadMessage(''), 5000);
       } else {
-        const errorData = await response.json();
-        setUploadMessage(`Upload failed: ${errorData.error || 'Unknown error'}`);
+        let errorMessage = 'Unknown error';
+        try {
+          const errorData = await response.json();
+          errorMessage =
+            errorData?.message ||
+            errorData?.detail ||
+            errorData?.error ||
+            errorData?.data?.message ||
+            errorMessage;
+        } catch {
+          errorMessage = `${response.status} ${response.statusText}`.trim();
+        }
+        setUploadMessage(`Upload failed: ${errorMessage}`);
       }
     } catch (error: any) {
       console.error('Upload error:', error);

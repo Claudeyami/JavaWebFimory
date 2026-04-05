@@ -214,6 +214,12 @@ const StoryPage: React.FC = () => {
     loadStory();
   }, [slug, searchParams, user?.email]);
 
+  useEffect(() => {
+    const chapterParam = searchParams.get('chapter');
+    if (!slug || !chapterParam) return;
+    navigate(`/stories/${slug}/read?chapter=${chapterParam}`, { replace: true });
+  }, [navigate, searchParams, slug]);
+
   // Scroll to comments section if URL hash is #comments
   useEffect(() => {
     if (!loading && story && window.location.hash === '#comments') {
@@ -260,12 +266,8 @@ const StoryPage: React.FC = () => {
   }, [loading, story]);
 
   const handleChapterSelect = (chapter: Chapter) => {
-    setCurrentChapter(chapter);
-    setSearchParams({ chapter: String(chapter.ChapterNumber) });
-    // Scroll to top when chapter changes
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    // Reset EXP flag khi chuyển chapter
-    setHasAwardedExp(false);
+    if (!slug) return;
+    navigate(`/stories/${slug}/read?chapter=${chapter.ChapterNumber}`);
   };
 
   // Load user role to check if Admin

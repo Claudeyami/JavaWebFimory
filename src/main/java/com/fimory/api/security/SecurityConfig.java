@@ -33,6 +33,7 @@ public class SecurityConfig {
                                 "/api/auth/login",
                                 "/api/movies/**",
                                 "/api/stories/**",
+                                "/api/reader/**",
                                 "/api/categories/**",
                                 "/api/search",
                                 "/api/movies/search",

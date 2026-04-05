@@ -84,12 +84,13 @@ public class UserController {
             userId = current.userId();
         }
         UserPreferenceDto preference = userService.getPreferences(userId);
-        return ResponseEntity.ok(ApiResponse.ok(Map.of(
-                "language", preference.language() == null ? "vi" : preference.language(),
-                "theme", preference.theme() == null ? "dark" : preference.theme(),
-                "auto_play", preference.autoPlay() != null && preference.autoPlay(),
-                "display_mode", "all"
-        )));
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.putAll(userService.getPreferenceMap(userId));
+        payload.put("language", preference.language() == null ? "vi" : preference.language());
+        payload.put("theme", preference.theme() == null ? "dark" : preference.theme());
+        payload.put("auto_play", preference.autoPlay() != null && preference.autoPlay());
+        payload.put("display_mode", "all");
+        return ResponseEntity.ok(ApiResponse.ok(payload));
     }
 
     @PostMapping({"/preferences", "/user/preferences"})
@@ -116,6 +117,8 @@ public class UserController {
                         ? Boolean.valueOf(value)
                         : current.autoPlay();
                 userService.updatePreferences(userId, new UpdatePreferenceRequest(language, theme, autoPlay));
+            } else {
+                userService.savePreference(userId, key, value);
             }
             return ResponseEntity.ok(ApiResponse.ok(Map.of(
                     "success", true,
