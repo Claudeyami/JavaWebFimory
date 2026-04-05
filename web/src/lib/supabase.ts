@@ -39,19 +39,28 @@ const emitAuth = (event: string, session: MockSession) => {
 const mockAuth = {
   signUp: async ({ email, password, options }: any) => {
     try {
+      const displayName =
+        options?.data?.display_name ||
+        options?.data?.username ||
+        options?.data?.full_name;
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           email,
           password,
+          displayName,
           username: options?.data?.username,
           fullName: options?.data?.full_name,
         }),
       });
       if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        return { data: null, error: { message: j.error || 'Registration failed' } };
+        const j: any = await res.json().catch(() => ({}));
+        const fieldMessage =
+          j?.fields && typeof j.fields === 'object'
+            ? Object.values(j.fields).find((value: any) => typeof value === 'string' && value.trim().length > 0)
+            : null;
+        return { data: null, error: { message: fieldMessage || j?.message || j?.error || 'Registration failed' } };
       }
       // Do not auto-login on sign up to match current UI flow
       return { data: { user: null }, error: null };
@@ -112,6 +121,7 @@ export const signUp = async (email: string, password: string, username: string, 
       data: {
         username,
         full_name: fullName,
+        display_name: username || fullName,
       }
     }
   });

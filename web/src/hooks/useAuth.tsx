@@ -50,6 +50,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         data: {
           username,
           full_name: fullName,
+          display_name: username || fullName,
         }
       }
     });
