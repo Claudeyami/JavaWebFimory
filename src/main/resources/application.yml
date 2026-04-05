@@ -5,7 +5,7 @@ spring:
   application:
     name: fimory-java-api
   datasource:
-    url: ${SQL_URL:jdbc:sqlserver://CHAUTHANH;instanceName=SQLEXPRESS;databaseName=Fimory;encrypt=false;trustServerCertificate=true}
+    url: ${SQL_URL:jdbc:sqlserver:LAPTOP-0D27IV7L;instanceName=SQLEXPRESS01;databaseName=Fimory;encrypt=false;trustServerCertificate=true}
     username: ${SQL_USER:fimory}
     password: ${SQL_PASSWORD:}
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
